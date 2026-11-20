@@ -30,6 +30,7 @@ type Processor struct {
 	Directory func() *directory.Directory
 	Renderer  notify.Renderer
 	Publisher *alerting.Publisher
+	Schemas   *schema.Registry
 	BatchSize int
 	Log       *slog.Logger
 }
@@ -102,6 +103,7 @@ func (p *Processor) processBatch(ctx context.Context, recs []*kgo.Record) error 
 	start := time.Now()
 	rs := p.Engine.Current()
 	groups := map[string]*group{}
+	observed := map[string]*schema.Observation{}
 
 	for _, rec := range recs {
 		env := &event.Envelope{}
@@ -111,6 +113,21 @@ func (p *Processor) processBatch(ctx context.Context, recs []*kgo.Record) error 
 		}
 		metrics.EventsProcessed.Inc()
 		doc := schema.NewDoc(env)
+		sig, overrides, fields := p.Schemas.Identify(env.Payload)
+		doc.Overrides = overrides
+		o := observed[sig]
+		if o == nil {
+			o = &schema.Observation{Signature: sig, Source: env.SourceID, Format: env.Format, Sample: env}
+			observed[sig] = o
+		}
+		if fields != nil {
+			o.Fields = fields
+		}
+		o.Count++
+		if env.ReceivedAt.After(o.LastSeen) {
+			o.LastSeen = env.ReceivedAt
+		}
+
 		for _, c := range rs.Match(doc) {
 			metrics.RuleMatches.WithLabelValues(c.Rule.ID).Inc()
 			fp := c.Fingerprint(doc)
@@ -130,6 +147,7 @@ func (p *Processor) processBatch(ctx context.Context, recs []*kgo.Record) error 
 		}
 	}
 	if len(groups) == 0 {
+		p.recordSchemas(ctx, observed)
 		metrics.ProcessBatchDuration.Observe(time.Since(start).Seconds())
 		return nil
 	}
@@ -158,6 +176,8 @@ func (p *Processor) processBatch(ctx context.Context, recs []*kgo.Record) error 
 			FirstEventID: g.first.Env.ID,
 			LastEventID:  g.lastID,
 			Sample:       g.first.Env.Payload,
+			SampleRaw:    g.first.Env.Raw,
+			SampleFormat: g.first.Env.Format,
 			Count:        g.count,
 			FirstSeen:    g.firstAt,
 			LastSeen:     g.lastAt,
@@ -204,8 +224,50 @@ func (p *Processor) processBatch(ctx context.Context, recs []*kgo.Record) error 
 	if err := p.Publisher.Publish(ctx, updates); err != nil {
 		p.Log.Warn("publish live updates", "err", err)
 	}
+	p.recordSchemas(ctx, observed)
 	metrics.ProcessBatchDuration.Observe(time.Since(start).Seconds())
 	return nil
+}
+
+// recordSchemas updates the schema catalogue. It is metadata, so failures are
+// logged and never block alert processing.
+func (p *Processor) recordSchemas(ctx context.Context, observed map[string]*schema.Observation) {
+	if len(observed) == 0 || ctx.Err() != nil {
+		return
+	}
+	obs := make([]*schema.Observation, 0, len(observed))
+	for _, o := range observed {
+		obs = append(obs, o)
+	}
+	created, err := p.Schemas.Record(ctx, obs)
+	if err != nil {
+		p.Log.Warn("record schemas", "err", err)
+	}
+	if len(created) == 0 {
+		return
+	}
+	updates := make([]alerting.Update, 0, len(created))
+	for _, s := range created {
+		seen := map[string]bool{}
+		var detected []string
+		for _, f := range s.Fields {
+			if f.Detected != "" && !seen[f.Detected] {
+				seen[f.Detected] = true
+				detected = append(detected, f.Detected)
+			}
+		}
+		source := ""
+		if len(s.Sources) > 0 {
+			source = s.Sources[0]
+		}
+		p.Log.Info("new schema detected", "schema", s.ID, "name", s.Name, "source", source, "fields", len(s.Fields),
+			"finance", detected)
+		updates = append(updates, alerting.Update{Kind: "schema", Schema: &alerting.SchemaNotice{
+			ID: s.ID, Name: s.Name, Source: source, Format: s.Format, Fields: len(s.Fields), Detected: detected}})
+	}
+	if err := p.Publisher.Publish(ctx, updates); err != nil {
+		p.Log.Warn("publish schema notices", "err", err)
+	}
 }
 
 // notificationsFor expands the rule's routes into one outbox row per

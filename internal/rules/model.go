@@ -19,6 +19,8 @@ type Rule struct {
 
 	// Origin records where the rule came from ("file:<name>" or "api").
 	Origin string `yaml:"-" json:"origin,omitempty"`
+	// Overrides is set when an API rule replaces a file rule with the same id.
+	Overrides string `yaml:"-" json:"overrides,omitempty"`
 }
 
 // IsEnabled defaults to true when the field is omitted.
@@ -33,6 +35,36 @@ type Condition struct {
 	Field string `yaml:"field,omitempty" json:"field,omitempty"`
 	Op    string `yaml:"op,omitempty" json:"op,omitempty"`
 	Value any    `yaml:"value,omitempty" json:"value,omitempty"`
+}
+
+// Normalize turns integral float64 values (how JSON decodes every number)
+// back into integers, so a rule round-tripped through the database renders
+// as 10000000 rather than 1e+07.
+func (c *Condition) Normalize() {
+	c.Value = normalizeValue(c.Value)
+	for i := range c.All {
+		c.All[i].Normalize()
+	}
+	for i := range c.Any {
+		c.Any[i].Normalize()
+	}
+	if c.Not != nil {
+		c.Not.Normalize()
+	}
+}
+
+func normalizeValue(v any) any {
+	switch x := v.(type) {
+	case float64:
+		if x == float64(int64(x)) && x < 1e15 && x > -1e15 {
+			return int64(x)
+		}
+	case []any:
+		for i := range x {
+			x[i] = normalizeValue(x[i])
+		}
+	}
+	return v
 }
 
 // Route sends alerts to a target ("team:<id>" or "user:<id>") on channels

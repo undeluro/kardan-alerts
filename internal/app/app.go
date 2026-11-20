@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"path/filepath"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -17,14 +16,16 @@ import (
 
 	"github.com/undeluro/kardan-alerts/internal/alerting"
 	"github.com/undeluro/kardan-alerts/internal/api"
-	"github.com/undeluro/kardan-alerts/internal/directory"
+	"github.com/undeluro/kardan-alerts/internal/event"
 	"github.com/undeluro/kardan-alerts/internal/ingest"
 	"github.com/undeluro/kardan-alerts/internal/notify"
+	"github.com/undeluro/kardan-alerts/internal/platform/bus"
 	"github.com/undeluro/kardan-alerts/internal/platform/config"
 	"github.com/undeluro/kardan-alerts/internal/platform/kafka"
 	"github.com/undeluro/kardan-alerts/internal/platform/pg"
 	"github.com/undeluro/kardan-alerts/internal/processor"
 	"github.com/undeluro/kardan-alerts/internal/rules"
+	"github.com/undeluro/kardan-alerts/internal/schema"
 	"github.com/undeluro/kardan-alerts/web"
 )
 
@@ -48,36 +49,11 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		return err
 	}
 
-	dir, err := directory.Load(filepath.Join(cfg.ConfigDir, "teams.yaml"))
-	if err != nil {
-		return fmt.Errorf("load teams: %w", err)
-	}
-	getDir := func() *directory.Directory { return dir }
-
-	engine := rules.NewEngine()
-	list, loadErrs := rules.LoadDir(filepath.Join(cfg.ConfigDir, "rules"))
-	rs := rules.Build(list, cfg.DedupWindow)
-	rs.Errors = append(loadErrs, rs.Errors...)
-	engine.Swap(rs)
-	for _, e := range rs.Errors {
-		log.Warn("rule skipped", "err", e)
-	}
-	log.Info("rules loaded", "count", len(rs.Rules), "skipped", len(rs.Errors))
-
 	store := &alerting.Store{Pool: pool}
 	publisher := &alerting.Publisher{Redis: rdb}
-	g, ctx := errgroup.WithContext(ctx)
-	mux := http.NewServeMux()
-
-	// Health and metrics exist on every replica, whatever its roles.
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		if err := pool.Ping(r.Context()); err != nil {
-			http.Error(w, "postgres: "+err.Error(), http.StatusServiceUnavailable)
-			return
-		}
-		_, _ = w.Write([]byte("ok"))
-	})
-	mux.Handle("GET /metrics", promhttp.Handler())
+	engine := rules.NewEngine()
+	ruleStore := &rules.Store{Pool: pool}
+	schemas := schema.NewRegistry(pool, log.With("component", "schemas"))
 
 	if cfg.Has(config.RoleIngest) || cfg.Has(config.RoleProcessor) {
 		admin, err := kafka.NewClient(ctx, cfg.KafkaBrokers, log)
@@ -91,6 +67,9 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		}
 	}
 
+	// Ingest: producer to the events topic, plus the configured sources.
+	var sources *ingest.Manager
+	var producer *ingest.Producer
 	if cfg.Has(config.RoleIngest) {
 		prod, err := kafka.NewClient(ctx, cfg.KafkaBrokers, log,
 			kgo.ProducerLinger(0),
@@ -100,7 +79,35 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 			return err
 		}
 		defer prod.Close()
-		(&ingest.HTTPHandler{Producer: &ingest.Producer{Kafka: prod, Topic: cfg.EventsTopic}, Log: log}).Register(mux)
+		producer = &ingest.Producer{Kafka: prod, Topic: cfg.EventsTopic}
+		sources = &ingest.Manager{Producer: producer, Redis: rdb, DefaultBrokers: cfg.KafkaBrokers,
+			InstanceID: cfg.InstanceID, Log: log.With("component", "sources")}
+	}
+
+	reloader := &Reloader{
+		ConfigDir: cfg.ConfigDir, Window: cfg.DedupWindow, Engine: engine, RuleStore: ruleStore,
+		Schemas: schemas, Sources: sources, Redis: rdb, Log: log.With("component", "config"),
+	}
+	if err := reloader.LoadAll(ctx); err != nil {
+		return err
+	}
+
+	g, ctx := errgroup.WithContext(ctx)
+	g.Go(func() error { return reloader.Run(ctx) })
+	mux := http.NewServeMux()
+
+	// Health and metrics exist on every replica, whatever its roles.
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		if err := pool.Ping(r.Context()); err != nil {
+			http.Error(w, "postgres: "+err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte("ok"))
+	})
+	mux.Handle("GET /metrics", promhttp.Handler())
+
+	if cfg.Has(config.RoleIngest) {
+		(&ingest.HTTPHandler{Producer: producer, Parsers: sources.ParserFor, Log: log}).Register(mux)
 	}
 
 	if cfg.Has(config.RoleProcessor) {
@@ -116,8 +123,8 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		}
 		defer cons.Close()
 		p := &processor.Processor{
-			Kafka: cons, Pool: pool, Engine: engine, Directory: getDir,
-			Renderer: notify.Renderer{PublicURL: cfg.PublicURL}, Publisher: publisher,
+			Kafka: cons, Pool: pool, Engine: engine, Directory: reloader.Directory,
+			Renderer: notify.Renderer{PublicURL: cfg.PublicURL}, Publisher: publisher, Schemas: schemas,
 			BatchSize: cfg.ProcessorBatch, Log: log.With("component", "processor"),
 		}
 		g.Go(func() error { return p.Run(ctx) })
@@ -145,9 +152,20 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		hub := &api.Hub{Redis: rdb, Log: log.With("component", "live")}
 		g.Go(func() error { return hub.Run(ctx) })
 		srv := &api.Server{
-			Store: store, Publisher: publisher, Engine: engine, Directory: getDir, Hub: hub,
-			UI: web.Dist(), Log: log.With("component", "api"),
+			Store: store, Publisher: publisher, Engine: engine, RuleStore: ruleStore, Schemas: schemas,
+			Directory: reloader.Directory, ConfigErrors: reloader.Errors, DefaultWindow: cfg.DedupWindow,
+			Notify: func(ctx context.Context, kind string) error { return bus.NotifyConfig(ctx, rdb, kind) },
+			ParseRaw: func(source string, raw []byte) *event.Envelope {
+				if sources != nil {
+					return ingest.NewEnvelope(sources.ParserFor(source), source, raw, nil)
+				}
+				return ingest.NewEnvelope(nil, source, raw, nil)
+			},
+			Hub: hub, UI: web.Dist(), Log: log.With("component", "api"),
 			Info: map[string]any{"version": Version, "instance": cfg.InstanceID, "roles": cfg.RoleList()},
+		}
+		if sources != nil {
+			srv.Sources = sources.Status
 		}
 		srv.Register(mux)
 	}

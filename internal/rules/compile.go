@@ -123,7 +123,7 @@ func humanize(path string) string {
 	if i := strings.LastIndexByte(path, '.'); i >= 0 {
 		last = path[i+1:]
 	}
-	last = strings.TrimPrefix(last, "$")
+	last = strings.TrimLeft(last, `$\@#`) // facets, escaped XML attributes (\@Ccy) and text nodes
 	var b strings.Builder
 	for i, r := range last {
 		switch {
@@ -146,11 +146,11 @@ func (c *Compiled) Matches(d *schema.Doc) bool { return c.match(d) }
 
 // Rendered is the presentation of an alert for one event.
 type Rendered struct {
-	Title    string
-	Body     string
-	Severity string
-	Color    string
-	Fields   []RenderedField
+	Title    string          `json:"title"`
+	Body     string          `json:"body"`
+	Severity string          `json:"severity"`
+	Color    string          `json:"color"`
+	Fields   []RenderedField `json:"fields"`
 }
 
 type RenderedField struct {

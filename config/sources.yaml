@@ -1,0 +1,43 @@
+# Where events come from. Changes apply live (no restart): new sources start,
+# removed ones stop, edited ones restart.
+#
+# HTTP needs no entry: POST /ingest/<any-id> works and auto-detects the format
+# (JSON, XML / ISO 20022, FIX, logfmt, plain text). List an HTTP source only to
+# pin a parser or document it.
+#
+# Parsers: auto | json | fix | iso20022 | xml | logfmt | regex | text
+sources:
+  # Appendix A: workflow failures and business events "from a message broker".
+  - id: broker-events
+    type: kafka
+    description: Workflow engine and trade gateway events on Kafka
+    topics: [workflow.events, trade.events]
+    create: true          # demo convenience: create the topics if missing
+    parser: json
+
+  # Pricing engine logs, tailed from disk. One ingest replica holds the lease.
+  - id: pricing-logs
+    type: file
+    description: pricing-engine-* application logs
+    path: /var/log/kardan-samples/pricing-*.log
+    parser: regex
+    pattern: '^(?P<ts>\S+) (?P<level>[A-Z]+) \[(?P<app>[^\]]+)\] instrument=(?P<instrument>\S+) latencyMs=(?P<latencyMs>\d+) (?P<message>.*)$'
+
+  # FIX engine session log (tag=value messages with a timestamp prefix).
+  - id: fix-gateway
+    type: file
+    description: FIX order-routing engine log
+    path: /var/log/kardan-samples/fix-*.log
+    parser: fix
+
+  # ISO 20022 payment status reports (pacs.002) pushed by the payments hub.
+  - id: swift-gateway
+    type: http
+    description: ISO 20022 status reports via webhook
+    parser: iso20022
+
+  # Prometheus Alertmanager webhook (Appendix A metric breach).
+  - id: alertmanager
+    type: http
+    description: Alertmanager webhook receiver
+    parser: json

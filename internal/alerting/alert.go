@@ -32,6 +32,8 @@ type Alert struct {
 	FirstEventID string                `json:"firstEventId"`
 	LastEventID  string                `json:"lastEventId"`
 	Sample       json.RawMessage       `json:"sample,omitempty"`
+	SampleRaw    string                `json:"sampleRaw,omitempty"`    // first event as received, for non-JSON formats
+	SampleFormat string                `json:"sampleFormat,omitempty"` // json | fix | iso20022 | ...
 	Count        int64                 `json:"count"`
 	FirstSeen    time.Time             `json:"firstSeen"`
 	LastSeen     time.Time             `json:"lastSeen"`
@@ -52,10 +54,23 @@ type Update struct {
 	// count updates carry only what changed, to stay small under load
 	ID       string    `json:"id,omitempty"`
 	Count    int64     `json:"count,omitempty"`
-	LastSeen time.Time `json:"lastSeen,omitempty"`
+	LastSeen time.Time `json:"lastSeen,omitzero"`
 
 	// ReceivedAt is when the triggering event was ingested (latency metrics).
-	ReceivedAt time.Time `json:"receivedAt,omitempty"`
+	ReceivedAt time.Time `json:"receivedAt,omitzero"`
+
+	// Schema announces a payload structure seen for the first time
+	// (kind "schema", sent to every team).
+	Schema *SchemaNotice `json:"schema,omitempty"`
+}
+
+type SchemaNotice struct {
+	ID       string   `json:"id"`
+	Name     string   `json:"name"`
+	Source   string   `json:"source"`
+	Format   string   `json:"format"`
+	Fields   int      `json:"fields"`
+	Detected []string `json:"detected,omitempty"` // finance kinds found, e.g. isin, iban, amount
 }
 
 // Notification is one outbox row: a message for one person on one channel.

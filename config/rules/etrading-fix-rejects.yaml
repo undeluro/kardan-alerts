@@ -1,0 +1,43 @@
+# Electronic trading: FIX traffic that needs a human. One file can hold
+# several rules under "rules:".
+rules:
+  # Orders rejected by a venue or broker (ExecutionReport with OrdStatus=Rejected).
+  - id: etrading-fix-order-rejects
+    name: FIX order rejected
+    team: etrading
+    match:
+      all:
+        - { field: $format,       op: eq, value: fix }
+        - { field: OrdStatusName, op: eq, value: Rejected }
+    routing:
+      - { to: team:etrading, channels: [email, ui] }
+    presentation:
+      title: "Order rejected: {{SideName}} {{OrderQty | number}} {{Symbol}} — {{Text | default \"no reason given\"}}"
+      fields:
+        - Order=ClOrdID
+        - Reason=OrdRejReasonName
+        - Notional=notional
+        - Currency=Currency
+        - Venue=SenderCompID
+    dedup:
+      key: "{{ClOrdID}}"
+
+  # Session-level and business-level rejects: the counterparty refused a message.
+  - id: etrading-fix-message-rejects
+    name: FIX message rejected by counterparty
+    team: etrading
+    match:
+      all:
+        - { field: $format, op: eq, value: fix }
+        - { field: msgType, op: in, value: [Reject, BusinessMessageReject, OrderCancelReject] }
+    routing:
+      - { to: team:etrading, channels: [ui] }
+    presentation:
+      title: "{{msgType}} from {{SenderCompID}}: {{Text | default \"no text\"}}"
+      fields:
+        - Reason=BusinessRejectReasonName
+        - Session reason=SessionRejectReasonName
+        - Rejected msg type=RefMsgType
+        - Rejected seq=RefSeqNum
+    dedup:
+      key: "{{SenderCompID}}|{{BusinessRejectReason}}{{SessionRejectReason}}"

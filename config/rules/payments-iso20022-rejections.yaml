@@ -1,0 +1,23 @@
+# Payments: an ISO 20022 status report (pacs.002) rejecting a payment.
+id: payments-iso20022-rejections
+name: Payment rejected (ISO 20022 status report)
+team: payments
+match:
+  all:
+    - { field: $format, op: eq, value: iso20022 }
+    - { field: status,  op: eq, value: RJCT }
+routing:
+  - { to: team:payments, channels: [email, ui] }
+presentation:
+  title: "Payment rejected: {{currency}} {{amount | number}} — {{reasonCode}} {{reasonName}}"
+  body: "{{additionalInfo}}"
+  severity: error
+  fields:
+    - End-to-end ID=endToEndId
+    - Debtor=debtor
+    - Debtor IBAN=debtorIban
+    - Creditor=creditor
+    - Creditor IBAN=creditorIban
+    - Message=messageType
+dedup:
+  key: "{{endToEndId}}"

@@ -34,6 +34,9 @@ services:
       ROLES: api,ingest
     ports:
       - "8080:8080"
+    volumes:
+      - ./config:/app/config:ro
+      - ./samples/logs:/var/log/kardan-samples:ro # tailed by the file sources in config/sources.yaml
 
   # Worker replicas: rules, dedup, alerts, outbox delivery. Stateless; scale freely
   # (up to the events topic's partition count for processing parallelism).

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type Alert, type Update } from "./api";
+import { api, type Alert, type SchemaNotice, type Update } from "./api";
 
 export type Connection = "connecting" | "live" | "offline";
 export type StatusFilter = "active" | "resolved" | "";
@@ -14,7 +14,9 @@ const byLastSeen = (a: Alert, b: Alert) => b.lastSeen.localeCompare(a.lastSeen);
  * stream (push, no page refresh). Every (re)connect re-syncs from REST, so a
  * dropped connection never leaves the feed stale.
  */
-export function useLiveAlerts(team: string, filter: StatusFilter) {
+export function useLiveAlerts(team: string, filter: StatusFilter, onSchema?: (s: SchemaNotice) => void) {
+  const onSchemaRef = useRef(onSchema);
+  onSchemaRef.current = onSchema;
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [connection, setConnection] = useState<Connection>("connecting");
   const [error, setError] = useState<string | null>(null);
@@ -50,6 +52,10 @@ export function useLiveAlerts(team: string, filter: StatusFilter) {
 
   const apply = useCallback(
     (u: Update) => {
+      if (u.kind === "schema") {
+        if (u.schema) onSchemaRef.current?.(u.schema);
+        return;
+      }
       setAlerts((prev) => {
         if (u.kind === "count" && u.id) {
           const idx = prev.findIndex((a) => a.id === u.id);

@@ -7,6 +7,7 @@ people:
   - { id: priya, name: Priya Raman,     email: priya@example.com, phone: "+1 212 555 0104", timezone: America/New_York }
   - { id: lee,   name: Lee Chen,        email: lee@example.com,   phone: "+852 5550 0105",  timezone: Asia/Hong_Kong }
   - { id: tom,   name: Tom Becker,      email: tom@example.com,   phone: "+49 30 5550106",  timezone: Europe/Berlin }
+  - { id: noah,  name: Noah Fischer,    email: noah@example.com,  phone: "+1 646 555 0107", timezone: America/New_York }
 
 teams:
   - { id: settlements,          name: Settlements Operations, members: [sam, maria] }
@@ -14,3 +15,4 @@ teams:
   - { id: rates,                name: Rates Desk Support,     members: [priya] }
   - { id: payments,             name: Payments Platform,      members: [anna, tom] }
   - { id: counterparty-support, name: Counterparty Support,   members: [tom] }
+  - { id: etrading,             name: Electronic Trading,     members: [noah, lee] }

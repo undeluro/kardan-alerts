@@ -1,0 +1,4 @@
+2026-11-20T09:15:01Z WARN [pricing-engine-3] instrument=EURUSD latencyMs=1240 quote latency 1240ms above 1000ms threshold
+2026-11-20T09:15:02Z WARN [pricing-engine-3] instrument=EURUSD latencyMs=1310 quote latency 1310ms above 1000ms threshold
+2026-11-20T09:15:02Z ERROR [pricing-engine-1] instrument=US10Y latencyMs=2050 cache miss storm, quote latency 2050ms
+2026-11-20T09:15:03Z INFO [pricing-engine-2] instrument=GBPUSD latencyMs=80 quote published

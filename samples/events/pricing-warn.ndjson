@@ -1,4 +1,0 @@
-{"ts":"2026-10-23T09:15:01Z","level":"WARN","app":"pricing-engine-3","instrument":"EURUSD","latencyMs":1240,"message":"quote latency 1240ms above 1000ms threshold"}
-{"ts":"2026-10-23T09:15:02Z","level":"WARN","app":"pricing-engine-3","instrument":"EURUSD","latencyMs":1310,"message":"quote latency 1310ms above 1000ms threshold"}
-{"ts":"2026-10-23T09:15:02Z","level":"ERROR","app":"pricing-engine-1","instrument":"US10Y","latencyMs":2050,"message":"cache miss storm, quote latency 2050ms"}
-{"ts":"2026-10-23T09:15:03Z","level":"INFO","app":"pricing-engine-2","instrument":"GBPUSD","latencyMs":80,"message":"quote published"}

@@ -1,5 +1,6 @@
-// Package ingest accepts events from sources and appends them to the events
-// topic. It never interprets the payload: schema handling happens downstream.
+// Package ingest accepts events from sources (HTTP, Kafka, files), parses
+// non-JSON formats into JSON, and appends them to the events topic. It never
+// applies rules: schema handling and matching happen downstream.
 package ingest
 
 import (
@@ -17,6 +18,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	"github.com/undeluro/kardan-alerts/internal/event"
+	"github.com/undeluro/kardan-alerts/internal/ingest/parse"
 	"github.com/undeluro/kardan-alerts/internal/platform/metrics"
 )
 
@@ -53,6 +55,7 @@ func (p *Producer) Append(ctx context.Context, envs []*event.Envelope) error {
 //	POST /ingest/{source}/batch   JSON array or newline-delimited JSON/text
 type HTTPHandler struct {
 	Producer *Producer
+	Parsers  func(source string) parse.Parser // per-source parser from sources.yaml; auto-detect otherwise
 	Log      *slog.Logger
 }
 
@@ -82,22 +85,25 @@ func (h *HTTPHandler) handle(batch bool) http.HandlerFunc {
 			return
 		}
 
-		var payloads []json.RawMessage
+		var messages [][]byte
 		if batch {
-			payloads = splitBatch(body)
+			messages = splitBatch(body)
 		} else {
-			payloads = []json.RawMessage{toPayload(body)}
+			messages = [][]byte{body}
 		}
 
-		now := time.Now().UTC()
 		meta := map[string]string{"transport": "http"}
 		if ct := r.Header.Get("Content-Type"); ct != "" {
 			meta["contentType"] = ct
 		}
-		envs := make([]*event.Envelope, len(payloads))
-		ids := make([]string, len(payloads))
-		for i, p := range payloads {
-			envs[i] = &event.Envelope{ID: event.NewID(), SourceID: source, ReceivedAt: now, Payload: p, Meta: meta}
+		parser := parse.Parser(parse.Auto{})
+		if h.Parsers != nil {
+			parser = h.Parsers(source)
+		}
+		envs := make([]*event.Envelope, len(messages))
+		ids := make([]string, len(messages))
+		for i, m := range messages {
+			envs[i] = NewEnvelope(parser, source, m, meta)
 			ids[i] = envs[i].ID
 		}
 		if err := h.Producer.Append(r.Context(), envs); err != nil {
@@ -116,25 +122,20 @@ func (h *HTTPHandler) handle(batch bool) http.HandlerFunc {
 	}
 }
 
-// toPayload keeps valid JSON as-is and wraps anything else (a log line, a FIX
-// message, XML) as {"message": "..."} so rules can still match on it.
-// Format-specific parsers (FIX, ISO 20022, grok) plug in here later.
-func toPayload(b []byte) json.RawMessage {
-	if json.Valid(b) && (b[0] == '{' || b[0] == '[') {
-		return json.RawMessage(b)
-	}
-	wrapped, _ := json.Marshal(map[string]string{"message": string(b)})
-	return wrapped
-}
-
-func splitBatch(body []byte) []json.RawMessage {
+// splitBatch accepts a JSON array or one message per line (NDJSON, log lines,
+// FIX messages...).
+func splitBatch(body []byte) [][]byte {
 	if body[0] == '[' {
 		var arr []json.RawMessage
 		if err := json.Unmarshal(body, &arr); err == nil {
-			return arr
+			out := make([][]byte, len(arr))
+			for i, m := range arr {
+				out[i] = m
+			}
+			return out
 		}
 	}
-	var out []json.RawMessage
+	var out [][]byte
 	sc := bufio.NewScanner(bytes.NewReader(body))
 	sc.Buffer(make([]byte, 64<<10), maxBody)
 	for sc.Scan() {
@@ -142,8 +143,7 @@ func splitBatch(body []byte) []json.RawMessage {
 		if len(line) == 0 {
 			continue
 		}
-		cp := append([]byte(nil), line...)
-		out = append(out, toPayload(cp))
+		out = append(out, append([]byte(nil), line...))
 	}
 	return out
 }

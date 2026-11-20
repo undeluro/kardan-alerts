@@ -4,8 +4,9 @@
 prefer, without flooding them, for trading, settlement and payments operations. It accepts events of *any* shape
 from any source, and teams decide what reaches them with rules they edit as data, not code.
 
-> Hackathon 2026 — *Flexible Alerting & Notification Service*. Status: **Milestones 1–2 done** (skeleton +
-> working end-to-end slice). See [Roadmap](#roadmap) for what is next.
+> Hackathon 2026 — *Flexible Alerting & Notification Service*. Status: **Milestones 1–3 done** (end-to-end
+> slice; Kafka, log-file, FIX and ISO 20022 sources; schema registry with finance field detection; live rule
+> editing). See [Roadmap](#roadmap) for what is next.
 
 ## Quick start
 
@@ -16,9 +17,13 @@ docker compose up --build          # first build takes ~2 minutes
 ./samples/send.sh                  # Windows: .\samples\send.ps1
 ```
 
+`send` pushes samples through every source type: HTTP webhooks (Alertmanager JSON, ISO 20022 XML), Kafka topics
+and tailed log files (regex-parsed pricing logs, a FIX engine log).
+
 | What                     | Where                                                         |
 |--------------------------|---------------------------------------------------------------|
 | Live alert feed (UI)     | http://localhost:8080                                         |
+| Rules, schemas, sources  | http://localhost:8080/rules · /schemas · /sources             |
 | Every email sent         | http://localhost:8025 (Mailpit)                               |
 | Prometheus metrics       | http://localhost:8080/metrics                                 |
 | SMS / phone (simulated)  | `docker compose logs worker \| grep "simulated delivery"`      |
@@ -27,15 +32,41 @@ Scale the workers horizontally: `docker compose up -d --scale worker=3`.
 
 ## What works today
 
-- **Any schema, zero code.** Events are kept verbatim. Rules address fields by path (`error.code`,
-  `labels.severity`, `payload.notional`). Canonical *facets* (`$severity`, `$service`, `$type`, `$env`) are
-  derived by heuristics, so one rule ("critical from payments-api") matches a Prometheus webhook, a workflow event
-  and a business event that each spell severity differently. Non-JSON input (log lines, FIX, XML) is wrapped as
-  `{"message": ...}` and is still matchable.
-- **Rules as data** (`config/rules/*.yaml`): `all` / `any` / `not` trees, 15 operators (`eq`, `in`, `gt`, `glob`,
-  `regex`, `severityAtLeast`, …), and routing and presentation per rule (title/body templates such as
-  `Rejected {{payload.currency}} {{payload.notional | number}}`, chosen fields, severity, colour). All four
-  example rules from the brief are included and pass tests.
+- **Many sources, configuration only** (`config/sources.yaml`, applied live):
+  - **HTTP webhooks:** `POST /ingest/<any-id>`, no declaration needed.
+  - **Kafka topics:** a consumer group per source, so ingest replicas share partitions; offsets are committed only
+    after the event is durably appended.
+  - **Log files:** tailed with globs and rotation. A Redis lease gives each file source to exactly one replica,
+    with fail-over.
+- **Many formats, auto-detected.**
+  - JSON.
+  - **FIX** tag=value: named tags and decoded enums, e.g. `OrdStatusName: Rejected`, plus a derived `notional`.
+  - **ISO 20022** XML: the summary is lifted to the top level (`status: RJCT`, `reasonCode: AC04` →
+    `ClosedAccountNumber`, amount, currency, IBANs).
+  - Generic XML, logfmt, regex with named groups, and plain text with level detection.
+  - Nothing is ever dropped: the original text is kept next to the parsed payload.
+- **Any schema, zero code.**
+  - Rules address fields by path (`error.code`, `payload.notional`).
+  - Canonical *facets* (`$severity`, `$service`, `$type`, `$env`, `$instrument`, `$counterparty`, `$currency`,
+    `$notional`, `$tradeId`, `$desk`, `$account`) let one rule work across schemas that spell things differently.
+- **Schema registry with finance detection.**
+  - Every new payload structure is catalogued and announced live in the UI ("New schema detected").
+  - Fields are classified by real check digits and names: ISIN (Luhn), LEI and IBAN (mod 97), currencies, amounts,
+    references, counterparties, settlement dates.
+  - Sensitive fields (IBANs, party names) are flagged for masking.
+  - Facets are mapped automatically and can be overridden per schema in the UI. Example: map an unknown
+    `criticity: HIGH` field to `$severity`, and it becomes `error`.
+- **Rules as data, edited live.**
+  - Rules are YAML files in `config/rules/` or rules created and edited in the UI/API. A UI edit of a file rule is
+    stored as an override, and "revert" restores the file.
+  - The language: `all` / `any` / `not` trees, 15 operators, templated titles and bodies, chosen fields, severity
+    and colour.
+  - Every save is validated, including unknown teams and recipients, and versioned with optimistic locking.
+  - Changes reach every replica within seconds through Redis pub/sub, a config-directory poll (works on Docker
+    Desktop bind mounts) and a periodic version check.
+  - The editor dry-runs the rule against a sample event (JSON, XML, FIX or a log line) through the same parser and
+    facet mapping as production.
+  - On a schema page, tick fields and get a drafted rule.
 - **No floods.** Repeats of the same problem fold into one alert with a counter: 500 identical errors become one
   alert ×500, two database writes and no re-paging. Resolving frees the fingerprint, so a recurrence opens a new
   alert.
@@ -52,9 +83,11 @@ Scale the workers horizontally: `docker compose up -d --scale worker=3`.
 ## Architecture
 
 ```
- POST /ingest/{source} ──► ingest ──► [kardan.events, 12 partitions] ──► processor × N
- (Kafka / file / poll                                                    rules → fingerprint → batch fold
-  sources: M3)                                                            │ one transaction:
+ HTTP webhook ─┐  parse (auto: json / fix / iso20022
+ Kafka topics ─┼► / xml / logfmt / regex / text) ──► [kardan.events, 12 partitions] ──► processor × N
+ Log files ────┘  (file sources leased to one replica)                   schema registry → facets → rules
+                                                                          → fingerprint → batch fold
+                                                                          │ one transaction:
                                                                           ▼ alerts upsert + outbox rows
                             browser ◄── SSE ◄── api × N ◄── Redis pub/sub ◄─┤
                                                                           ▼ NOTIFY
@@ -68,6 +101,8 @@ Scale the workers horizontally: `docker compose up -d --scale worker=3`.
 | Dispatcher crash | Rows are leased (`locked_until`); another replica picks them up |
 | Channel outage | Rows wait in `retry` with backoff; other channels are unaffected |
 | Live updates on any replica | Redis pub/sub fan-out; clients re-sync from REST on reconnect |
+| Config changes on every replica | Redis notice + config-dir poll + DB version check; atomic rule-set swap |
+| Tailing a file from many replicas | Redis lease per file source; others stand by and take over |
 
 ## Writing a rule
 
@@ -88,10 +123,11 @@ presentation:
 dedup: { key: "{{payload.tradeId}}" }
 ```
 
-Try a rule against an event without saving it:
+Create or change rules without touching files (YAML or JSON bodies), or dry-run one first:
 
 ```sh
-curl -s localhost:8080/api/rules/test -d '{"rule": {...}, "event": {...}}'
+curl -s localhost:8080/api/rules -H 'Content-Type: application/yaml' --data-binary @my-rule.yaml
+curl -s localhost:8080/api/rules/test -d '{"ruleYaml": "...", "raw": "<any event text: JSON, XML, FIX, log line>"}'
 ```
 
 Template filters: `number`, `upper`, `lower`, `default "x"`, `truncate N`, `json`.
@@ -106,8 +142,13 @@ Template filters: `number`, `upper`, `lower`, `default "x"`, `truncate N`, `json
 | GET | `/api/alerts/{id}` | alert + deliveries |
 | POST | `/api/alerts/{id}/ack` · `/resolve` | body `{"by": "name"}` |
 | GET | `/api/stream?team=` | server-sent events |
-| GET | `/api/rules` · POST `/api/rules/test` | loaded rules / dry run |
-| GET | `/api/teams` · `/api/stats` · `/api/info` | directory, counters, facets and operators |
+| GET · POST | `/api/rules` | list / create (YAML or JSON) |
+| GET · PUT · DELETE | `/api/rules/{id}` | detail with YAML / update (`If-Match: <version>`) / delete or revert |
+| POST | `/api/rules/test` | dry run: `{ruleYaml or rule, event or raw}` |
+| GET | `/api/schemas` · `/api/schemas/{id}` | catalogue, fields, finance detection, facet values |
+| PUT | `/api/schemas/{id}` | rename, set facet mappings `{"facets": {"$severity": "criticity"}}` |
+| GET | `/api/sources` | configured sources with live status |
+| GET | `/api/teams` · `/api/stats` · `/api/info` | directory, counters, facets, operators, config errors |
 
 ## Development
 
@@ -133,8 +174,8 @@ Configuration is through environment variables with working defaults; see `inter
 
 1. ~~Skeleton~~ ✔
 2. ~~Vertical slice: HTTP ingest → rules → dedup → alerts → live feed → email~~ ✔
-3. Kafka, file-tail, FIX and ISO 20022 sources; schema registry with finance field detection; rule CRUD with hot
-   reload
+3. ~~Kafka, file-tail, FIX and ISO 20022 sources; schema registry with finance field detection; rule CRUD with hot
+   reload~~ ✔
 4. Fake SMS/phone gateway; preferences with working hours and follow-the-sun on-call; masking per channel;
    circuit breakers
 5. Grouping digests, throttling, auto-resolve, FX-normalised dollar impact, incident correlation

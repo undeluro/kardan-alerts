@@ -20,14 +20,15 @@ type Store struct {
 var ErrNotFound = errors.New("not found")
 
 const alertColumns = `id, fingerprint, rule_id, team, status, severity, color, title, body, fields,
-	source_id, first_event_id, last_event_id, sample, count, first_seen, last_seen,
+	source_id, first_event_id, last_event_id, sample, sample_raw, sample_format, count, first_seen, last_seen,
 	acked_by, acked_at, resolved_by, resolved_at, created_at, updated_at`
 
 func scanAlert(row pgx.Row) (*Alert, error) {
 	var a Alert
 	var fields []byte
 	err := row.Scan(&a.ID, &a.Fingerprint, &a.RuleID, &a.Team, &a.Status, &a.Severity, &a.Color, &a.Title,
-		&a.Body, &fields, &a.SourceID, &a.FirstEventID, &a.LastEventID, &a.Sample, &a.Count, &a.FirstSeen,
+		&a.Body, &fields, &a.SourceID, &a.FirstEventID, &a.LastEventID, &a.Sample, &a.SampleRaw, &a.SampleFormat,
+		&a.Count, &a.FirstSeen,
 		&a.LastSeen, &a.AckedBy, &a.AckedAt, &a.ResolvedBy, &a.ResolvedAt, &a.CreatedAt, &a.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -74,8 +75,9 @@ func Upsert(ctx context.Context, tx pgx.Tx, in []UpsertInput) ([]UpsertResult, e
 		}
 		b.Queue(`
 			INSERT INTO alerts (id, fingerprint, rule_id, team, severity, color, title, body, fields,
-			                    source_id, first_event_id, last_event_id, sample, count, first_seen, last_seen)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+			                    source_id, first_event_id, last_event_id, sample, count, first_seen, last_seen,
+			                    sample_raw, sample_format)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 			ON CONFLICT (fingerprint) WHERE status <> 'resolved' DO UPDATE SET
 			    count         = alerts.count + EXCLUDED.count,
 			    last_seen     = GREATEST(alerts.last_seen, EXCLUDED.last_seen),
@@ -83,7 +85,8 @@ func Upsert(ctx context.Context, tx pgx.Tx, in []UpsertInput) ([]UpsertResult, e
 			    updated_at    = now()
 			RETURNING id, count, last_seen, (xmax = 0) AS inserted`,
 			a.ID, a.Fingerprint, a.RuleID, a.Team, a.Severity, a.Color, a.Title, a.Body, fields,
-			a.SourceID, a.FirstEventID, a.LastEventID, a.Sample, a.Count, a.FirstSeen, a.LastSeen)
+			a.SourceID, a.FirstEventID, a.LastEventID, a.Sample, a.Count, a.FirstSeen, a.LastSeen,
+			a.SampleRaw, a.SampleFormat)
 	}
 	br := tx.SendBatch(ctx, b)
 	defer br.Close()

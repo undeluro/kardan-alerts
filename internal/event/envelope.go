@@ -17,7 +17,9 @@ type Envelope struct {
 	SourceID   string            `json:"sourceId"`
 	ReceivedAt time.Time         `json:"receivedAt"`
 	Payload    json.RawMessage   `json:"payload"`
-	Meta       map[string]string `json:"meta,omitempty"` // transport details: topic, file, line, content type
+	Format     string            `json:"format,omitempty"` // json | fix | iso20022 | xml | logfmt | regex | text
+	Raw        string            `json:"raw,omitempty"`    // original text when the payload was parsed from a non-JSON format
+	Meta       map[string]string `json:"meta,omitempty"`   // transport details: topic, file, line, content type
 }
 
 // NewID returns a lexicographically sortable unique id (ULID).

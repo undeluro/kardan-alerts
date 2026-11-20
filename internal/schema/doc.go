@@ -26,12 +26,25 @@ var facetCandidates = map[string][]string{
 	"$type": {"type", "alertname", "meta.schema", "eventType", "event_type", "event", "kind", "schema",
 		"meta.type"},
 	"$env": {"environment", "env", "labels.environment", "labels.env", "meta.env", "meta.environment"},
+
+	// Finance facets. Schemas with unusual field names get these mapped
+	// automatically by field detection (detect.go) or by hand (schema facets).
+	"$instrument":   {"instrument", "symbol", "Symbol", "isin", "payload.instrument", "payload.isin", "payload.symbol", "ticker", "SecurityID"},
+	"$counterparty": {"counterparty", "cpty", "payload.counterparty", "payload.cpty", "counterpartyLei", "PartyID"},
+	"$currency":     {"currency", "ccy", "Currency", "payload.currency", "payload.ccy", "amount.currency"},
+	"$notional":     {"notional", "payload.notional", "amount", "payload.amount", "notionalAmount", "amount.value"},
+	"$tradeId":      {"tradeId", "payload.tradeId", "TradeID", "ClOrdID", "orderId", "endToEndId", "workflowId"},
+	"$desk":         {"desk", "payload.desk", "book", "payload.book"},
+	"$account":      {"account", "iban", "debtorIban", "Account"},
 }
 
 // Doc is one event as seen by the rule engine.
 type Doc struct {
-	Env    *event.Envelope
-	facets map[string]gjson.Result
+	Env *event.Envelope
+	// Overrides maps facets to paths for this event's schema (auto-detected
+	// or set by a person); they take precedence over the generic candidates.
+	Overrides map[string]string
+	facets    map[string]gjson.Result
 }
 
 func NewDoc(env *event.Envelope) *Doc { return &Doc{Env: env} }
@@ -56,8 +69,17 @@ func (d *Doc) facet(name string) gjson.Result {
 		r = str(d.Env.ID)
 	case "$receivedAt":
 		r = str(d.Env.ReceivedAt.UTC().Format(time.RFC3339Nano))
+	case "$raw":
+		r = str(d.Env.Raw)
+	case "$format":
+		r = str(d.Env.Format)
 	default:
-		r = d.firstScalar(facetCandidates[name])
+		if p, ok := d.Overrides[name]; ok && p != "" {
+			r = gjson.GetBytes(d.Env.Payload, p)
+		}
+		if !r.Exists() {
+			r = d.firstScalar(facetCandidates[name])
+		}
 		if name == "$severity" && r.Exists() {
 			if norm := NormalizeSeverity(r.String()); norm != "" {
 				r = str(norm)
@@ -91,5 +113,16 @@ func str(s string) gjson.Result {
 
 // FacetNames lists the canonical facets rules may reference.
 func FacetNames() []string {
-	return []string{"$severity", "$service", "$type", "$env", "$source", "$id", "$receivedAt"}
+	return []string{"$severity", "$service", "$type", "$env", "$instrument", "$counterparty", "$currency",
+		"$notional", "$tradeId", "$desk", "$account", "$source", "$format", "$raw", "$id", "$receivedAt"}
+}
+
+// IsFacet reports whether name is a known canonical facet.
+func IsFacet(name string) bool {
+	for _, f := range FacetNames() {
+		if f == name {
+			return true
+		}
+	}
+	return false
 }

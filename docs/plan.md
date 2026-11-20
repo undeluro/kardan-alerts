@@ -282,6 +282,17 @@ kardan-alerts/
 - **Plain pgx instead of sqlc:** the write path uses pgx batches + `CopyFrom`; no codegen step for judges.
 - Dispatcher claims only as many outbox rows as it has free workers (no lease expiry → no double sends).
 
+## Implementation notes (M3)
+
+- **Config hot reload by polling, not fsnotify:** file-system events from a Windows/macOS host do not reach
+  containers through Docker Desktop bind mounts, so the config dir is fingerprinted every 2 s; API changes travel
+  over Redis pub/sub, with a 15 s DB version check as a safety net.
+- **Parsing happens at ingest**, so the events topic carries JSON payloads plus the original text (`raw`) and
+  `format`; alerts keep the first event's raw text so the rule editor replays it through the same parser.
+- **Stored rules override file rules with the same id**: editing a file rule in the UI never rewrites the file.
+- **Schema auto-facets are recomputed on read** from stored fields, so detection improvements apply to old schemas.
+- File sources are leased per source in Redis (one tailing replica, fail-over within the lease TTL).
+
 ## Milestones
 
 1. **Skeleton** — go.mod, compose (redpanda, postgres, redis, mailpit), role switch, migrations, React scaffold

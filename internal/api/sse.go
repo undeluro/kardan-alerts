@@ -81,8 +81,8 @@ func (h *Hub) broadcast(payload []byte) {
 	h.mu.RLock()
 	delivered := false
 	for c := range h.clients {
-		if c.team != "" && c.team != team {
-			continue
+		if c.team != "" && team != "" && c.team != team {
+			continue // team "" = broadcast (e.g. new schema detected)
 		}
 		select {
 		case c.ch <- payload:

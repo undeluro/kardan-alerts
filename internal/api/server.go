@@ -2,6 +2,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io/fs"
@@ -14,19 +15,28 @@ import (
 
 	"github.com/undeluro/kardan-alerts/internal/alerting"
 	"github.com/undeluro/kardan-alerts/internal/directory"
+	"github.com/undeluro/kardan-alerts/internal/event"
+	"github.com/undeluro/kardan-alerts/internal/ingest"
 	"github.com/undeluro/kardan-alerts/internal/rules"
 	"github.com/undeluro/kardan-alerts/internal/schema"
 )
 
 type Server struct {
-	Store     *alerting.Store
-	Publisher *alerting.Publisher
-	Engine    *rules.Engine
-	Directory func() *directory.Directory
-	Hub       *Hub
-	UI        fs.FS // built React app; nil when not embedded
-	Log       *slog.Logger
-	Info      map[string]any
+	Store         *alerting.Store
+	Publisher     *alerting.Publisher
+	Engine        *rules.Engine
+	RuleStore     *rules.Store
+	Schemas       *schema.Registry
+	Directory     func() *directory.Directory
+	Sources       func() []ingest.SourceStatus // nil when this replica has no ingest role
+	ConfigErrors  func() []string
+	Notify        func(ctx context.Context, kind string) error
+	ParseRaw      func(source string, raw []byte) *event.Envelope
+	DefaultWindow time.Duration
+	Hub           *Hub
+	UI            fs.FS // built React app; nil when not embedded
+	Log           *slog.Logger
+	Info          map[string]any
 }
 
 func (s *Server) Register(mux *http.ServeMux) {
@@ -38,7 +48,15 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/stats", s.stats)
 	mux.HandleFunc("GET /api/teams", s.teams)
 	mux.HandleFunc("GET /api/rules", s.listRules)
+	mux.HandleFunc("POST /api/rules", s.createRule)
 	mux.HandleFunc("POST /api/rules/test", s.testRule)
+	mux.HandleFunc("GET /api/rules/{id}", s.getRule)
+	mux.HandleFunc("PUT /api/rules/{id}", s.updateRule)
+	mux.HandleFunc("DELETE /api/rules/{id}", s.deleteRule)
+	mux.HandleFunc("GET /api/schemas", s.listSchemas)
+	mux.HandleFunc("GET /api/schemas/{id}", s.getSchema)
+	mux.HandleFunc("PUT /api/schemas/{id}", s.updateSchema)
+	mux.HandleFunc("GET /api/sources", s.listSources)
 	mux.Handle("GET /api/stream", s.Hub)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "no such endpoint")
@@ -47,7 +65,12 @@ func (s *Server) Register(mux *http.ServeMux) {
 }
 
 func (s *Server) info(w http.ResponseWriter, _ *http.Request) {
-	out := map[string]any{"facets": schema.FacetNames(), "ops": rules.Ops}
+	out := map[string]any{"facets": schema.FacetNames(), "ops": rules.Ops, "configErrors": []string{}}
+	if s.ConfigErrors != nil {
+		if errs := s.ConfigErrors(); len(errs) > 0 {
+			out["configErrors"] = errs
+		}
+	}
 	for k, v := range s.Info {
 		out[k] = v
 	}
@@ -63,7 +86,7 @@ func (s *Server) listAlerts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, a := range alerts {
-		a.Sample = nil // keep the list light; detail view loads it
+		a.Sample, a.SampleRaw = nil, "" // keep the list light; detail view loads them
 	}
 	writeJSON(w, http.StatusOK, alerts)
 }
@@ -103,7 +126,7 @@ func (s *Server) transition(action string) http.HandlerFunc {
 			s.fail(w, err)
 			return
 		}
-		a.Sample = nil
+		a.Sample, a.SampleRaw = nil, ""
 		if err := s.Publisher.Publish(r.Context(), []alerting.Update{{Kind: "status", Team: a.Team, Alert: a}}); err != nil {
 			s.Log.Warn("publish status update", "err", err)
 		}
@@ -127,44 +150,21 @@ func (s *Server) teams(w http.ResponseWriter, _ *http.Request) {
 
 type ruleView struct {
 	rules.Rule
-	Fields []string `json:"fields"`
+	Fields  []string `json:"fields"`
+	Enabled bool     `json:"enabled"`
 }
 
 func (s *Server) listRules(w http.ResponseWriter, _ *http.Request) {
 	rs := s.Engine.Current()
 	out := make([]ruleView, 0, len(rs.Rules))
 	for _, c := range rs.Rules {
-		out = append(out, ruleView{Rule: c.Rule, Fields: rules.ReferencedFields(c.Rule.Match)})
+		out = append(out, ruleView{Rule: c.Rule, Fields: rules.ReferencedFields(c.Rule.Match), Enabled: c.Rule.IsEnabled()})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"rules": out, "errors": rs.Errors, "loadedAt": rs.LoadedAt})
-}
-
-// testRule dry-runs a rule against a sample event without saving anything:
-// POST /api/rules/test {"rule": {...}, "event": {...}}
-func (s *Server) testRule(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Rule  rules.Rule      `json:"rule"`
-		Event json.RawMessage `json:"event"`
+	errs := rs.Errors
+	if errs == nil {
+		errs = []string{}
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, "body must be {rule, event}: "+err.Error())
-		return
-	}
-	if req.Rule.ID == "" {
-		req.Rule.ID = "draft"
-	}
-	c, err := rules.Compile(req.Rule, 5*time.Minute)
-	if err != nil {
-		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"valid": false, "error": err.Error()})
-		return
-	}
-	doc := testDoc(req.Event)
-	resp := map[string]any{"valid": true, "matches": c.Matches(doc)}
-	if c.Matches(doc) {
-		resp["alert"] = c.Render(doc)
-		resp["fingerprint"] = c.Fingerprint(doc)
-	}
-	writeJSON(w, http.StatusOK, resp)
+	writeJSON(w, http.StatusOK, map[string]any{"rules": out, "errors": errs, "loadedAt": rs.LoadedAt})
 }
 
 // spa serves the embedded UI and falls back to index.html for client routes.

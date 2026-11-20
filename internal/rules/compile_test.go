@@ -238,3 +238,12 @@ func BenchmarkMatch(b *testing.B) {
 		}
 	}
 }
+
+func TestHumanizeLabels(t *testing.T) {
+	cases := map[string]string{"payload.tradeId": "Trade Id", `Amt.\@Ccy`: "Ccy", "$severity": "Severity", "error_code": "Error code"}
+	for in, want := range cases {
+		if got := humanize(in); got != want {
+			t.Errorf("humanize(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

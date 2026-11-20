@@ -38,7 +38,9 @@ export function AlertDrawer({ id, live, now, onClose, onAck, onResolve }: Props)
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const a = live ? { ...detail?.alert, ...live, sample: detail?.alert.sample } : detail?.alert;
+  const a = live
+    ? { ...detail?.alert, ...live, sample: detail?.alert.sample, sampleRaw: detail?.alert.sampleRaw, sampleFormat: detail?.alert.sampleFormat }
+    : detail?.alert;
 
   return (
     <div className="fixed inset-0 z-40 flex justify-end" role="dialog" aria-modal="true">
@@ -108,9 +110,17 @@ export function AlertDrawer({ id, live, now, onClose, onAck, onResolve }: Props)
               </ul>
             </section>
 
+            {a.sampleRaw && (
+              <section className="px-5 pt-5">
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">First event as received ({a.sampleFormat})</h3>
+                <pre className="mt-2 overflow-x-auto rounded-md bg-gray-50 p-3 font-mono text-xs whitespace-pre-wrap break-all text-gray-800 ring-1 ring-gray-200 dark:bg-gray-900 dark:text-gray-200 dark:ring-gray-800">
+                  {a.sampleRaw}
+                </pre>
+              </section>
+            )}
             {a.sample !== undefined && (
               <section className="p-5">
-                <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">First event payload</h3>
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">{a.sampleRaw ? "Parsed payload" : "First event payload"}</h3>
                 <pre className="mt-2 overflow-x-auto rounded-md bg-gray-50 p-3 font-mono text-xs text-gray-800 ring-1 ring-gray-200 dark:bg-gray-900 dark:text-gray-200 dark:ring-gray-800">
                   {JSON.stringify(a.sample, null, 2)}
                 </pre>

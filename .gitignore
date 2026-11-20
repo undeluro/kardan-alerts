@@ -20,3 +20,6 @@ web/dist/*
 *.swp
 .DS_Store
 Thumbs.db
+
+# Demo log files written by samples/send.*
+samples/logs/*.log
