@@ -22,6 +22,7 @@ and tailed log files (regex-parsed pricing logs, a FIX engine log).
 
 | What                     | Where                                                         |
 |--------------------------|---------------------------------------------------------------|
+| Product overview         | http://localhost:8080/landing                                |
 | Live alert feed (UI)     | http://localhost:8080                                         |
 | Rules, schemas, sources  | http://localhost:8080/rules · /schemas · /sources             |
 | Every email sent         | http://localhost:8025 (Mailpit)                               |
