@@ -1,0 +1,16 @@
+{
+  "type": "WORKFLOW_FAILED",
+  "workflowId": "WF-20261121-00314",
+  "workflowName": "order-settlement",
+  "step": "validate-counterparty",
+  "severity": "ERROR",
+  "environment": "prod",
+  "timestamp": "2026-10-23T09:14:02.331Z",
+  "error": {
+    "code": "TIMEOUT",
+    "message": "Counterparty service did not respond in 5000 ms"
+  },
+  "notional": 180000000,
+  "currency": "USD",
+  "counterparty": "ACME-CAPITAL"
+}

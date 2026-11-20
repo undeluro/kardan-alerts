@@ -1,0 +1,16 @@
+# A trade rejected for breaching a limit (Appendix A's business event has
+# reason LIMIT_BREACH). Tell Risk straight away; pausing the desk is the
+# kill switch: high risk, so a second person from the desk's team approves.
+runbook: limit-breach
+name: Trading limit breach
+team: rates
+matches:
+  payload.reason: LIMIT_BREACH
+steps:
+  - action: notify_risk
+    summary: "{{payload.desk}} desk breached a limit: trade {{payload.tradeId}}, {{payload.currency}} {{payload.notional}}"
+    desk: "{{payload.desk}}"
+  - check: "Confirm the breach with the desk head and in the limit system (trade {{payload.tradeId}})"
+  - if: "the desk keeps breaching"
+    action: pause_trading
+    desk: "{{payload.desk}}"

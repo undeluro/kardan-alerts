@@ -4,6 +4,9 @@ import { AlertsPage } from "./pages/AlertsPage";
 import { DeliveriesPage } from "./pages/DeliveriesPage";
 import { TeamsPage } from "./pages/TeamsPage";
 import { MarketsPage } from "./pages/MarketsPage";
+import { RunbooksPage } from "./pages/RunbooksPage";
+import { RunbookEditor } from "./pages/RunbookEditor";
+import { AuditPage } from "./pages/AuditPage";
 import { setBusinessClock } from "./clock";
 import { RuleEditor } from "./pages/RuleEditor";
 import { RulesPage } from "./pages/RulesPage";
@@ -36,9 +39,11 @@ const NAV = [
   { to: "/rules", label: "Rules", match: (p: string) => p.startsWith("/rules") },
   { to: "/schemas", label: "Schemas", match: (p: string) => p.startsWith("/schemas") },
   { to: "/sources", label: "Sources", match: (p: string) => p.startsWith("/sources") },
+  { to: "/runbooks", label: "Runbooks", match: (p: string) => p.startsWith("/runbooks") },
   { to: "/markets", label: "Markets", match: (p: string) => p.startsWith("/markets") },
   { to: "/deliveries", label: "Deliveries", match: (p: string) => p.startsWith("/deliveries") },
   { to: "/teams", label: "Teams", match: (p: string) => p.startsWith("/teams") },
+  { to: "/audit", label: "Audit", match: (p: string) => p.startsWith("/audit") },
 ];
 
 export default function App() {
@@ -104,6 +109,7 @@ export default function App() {
   const alertId = path.match(/^\/alerts\/([A-Z0-9]+)/i)?.[1] ?? null;
   const ruleMatch = path.match(/^\/rules\/(.+)$/);
   const schemaMatch = path.match(/^\/schemas\/([0-9a-f]+)$/);
+  const runbookMatch = path.match(/^\/runbooks\/(.+)$/);
 
   let page;
   if (path === "/rules") page = <RulesPage />;
@@ -115,6 +121,10 @@ export default function App() {
   else if (path === "/deliveries") page = <DeliveriesPage now={now} onToast={showToast} />;
   else if (path === "/teams") page = <TeamsPage onClockChange={loadClock} />;
   else if (path === "/markets") page = <MarketsPage />;
+  else if (path === "/runbooks") page = <RunbooksPage />;
+  else if (path === "/runbooks/new") page = <RunbookEditor key="new" id={null} teams={teams} />;
+  else if (runbookMatch) page = <RunbookEditor key={runbookMatch[1]} id={decodeURIComponent(runbookMatch[1])} teams={teams} />;
+  else if (path === "/audit") page = <AuditPage />;
   else if (path !== "/" && !alertId)
     page = (
       <div className="py-16 text-center">

@@ -668,3 +668,13 @@ func ReferencedFields(c Condition) []string {
 	sort.Strings(out)
 	return out
 }
+
+// CompileCondition compiles a condition tree on its own (runbook matches).
+func CompileCondition(c Condition) (func(d *schema.Doc) bool, error) {
+	c.Normalize()
+	p, err := compileCond(c, "matches")
+	if err != nil {
+		return nil, err
+	}
+	return p, nil
+}

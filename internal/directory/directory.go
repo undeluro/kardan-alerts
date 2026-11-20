@@ -196,3 +196,32 @@ func (p Person) Address(channel string) string {
 	}
 	return ""
 }
+
+// Find looks a person up by id or name (case-insensitive), as typed in the
+// UI's "acting as" box. Approvals use it to tell people apart.
+func (d *Directory) Find(nameOrID string) (Person, bool) {
+	s := strings.TrimSpace(nameOrID)
+	if p, ok := d.people[s]; ok {
+		return p, true
+	}
+	for _, p := range d.People {
+		if strings.EqualFold(p.ID, s) || strings.EqualFold(p.Name, s) {
+			return p, true
+		}
+	}
+	return Person{}, false
+}
+
+// IsMember reports whether a person belongs to a team.
+func (d *Directory) IsMember(teamID, personID string) bool {
+	t, ok := d.Team(teamID)
+	if !ok {
+		return false
+	}
+	for _, m := range t.Members {
+		if m == personID {
+			return true
+		}
+	}
+	return false
+}

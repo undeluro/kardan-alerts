@@ -47,6 +47,11 @@ export function AlertCard({ alert: a, incident, onIncident, flash, now, busy, on
             )}
             {a.cutoffName && a.cutoffAt && <CutoffChip name={a.cutoffName} at={a.cutoffAt} now={bizNow} resolved={resolved} />}
             <EscalationBadge level={a.escalationLevel} />
+            {(a.pendingApprovals ?? 0) > 0 && (
+              <Badge className="bg-fuchsia-600 text-white ring-fuchsia-600 dark:bg-fuchsia-500 dark:ring-fuchsia-500">
+                <span title="A runbook step waits for a second person's approval">✋ approval needed</span>
+              </Badge>
+            )}
             {windowLabel && (
               <Badge className="bg-sky-50 text-sky-700 ring-sky-600/20 dark:bg-sky-500/10 dark:text-sky-300 dark:ring-sky-400/30">
                 {windowLabel}

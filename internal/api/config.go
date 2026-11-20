@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/undeluro/kardan-alerts/internal/audit"
 	"io"
 	"net/http"
 	"strconv"
@@ -169,6 +170,8 @@ func (s *Server) saveRule(w http.ResponseWriter, r *http.Request, rule rules.Rul
 	}
 	s.notify(r, "rules")
 	s.Log.Info("rule saved", "rule", rule.ID, "by", actor(r), "version", st.Version)
+	s.record(r, audit.Event{Actor: actor(r), Action: map[bool]string{true: "rule.create", false: "rule.update"}[st.Version == 1],
+		Subject: "rule:" + rule.ID, Detail: map[string]any{"version": st.Version}})
 	writeJSON(w, status, s.detail(st.Rule, st))
 }
 
@@ -189,6 +192,7 @@ func (s *Server) deleteRule(w http.ResponseWriter, r *http.Request) {
 	}
 	s.notify(r, "rules")
 	s.Log.Info("rule deleted", "rule", id, "by", actor(r))
+	s.record(r, audit.Event{Actor: actor(r), Action: "rule.delete", Subject: "rule:" + id})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -444,6 +448,8 @@ func (s *Server) updateSchema(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.notify(r, "schemas")
+	s.record(r, audit.Event{Actor: actor(r), Action: "schema.update", Subject: "schema:" + sc.ID,
+		Detail: map[string]any{"name": req.Name, "facets": req.Facets}})
 	s.Log.Info("schema facets updated", "schema", sc.ID, "by", actor(r))
 	writeJSON(w, http.StatusOK, s.schemaDetail(sc))
 }

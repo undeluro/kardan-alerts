@@ -78,6 +78,17 @@ var (
 		Help: "Notifications held by per-recipient throttling, by channel.",
 	}, []string{"channel"})
 
+	RunbookActions = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "kardan_runbook_actions_total",
+		Help: "Runbook actions executed, by action kind and outcome.",
+	}, []string{"action", "outcome"})
+
+	RunbookActionDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "kardan_runbook_action_duration_seconds",
+		Help:    "Time to execute a runbook action.",
+		Buckets: prometheus.DefBuckets,
+	}, []string{"action"})
+
 	Escalations = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "kardan_escalations_total",
 		Help: "Escalation steps taken for unacknowledged alerts, by team.",

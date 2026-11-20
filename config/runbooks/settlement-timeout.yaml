@@ -1,0 +1,21 @@
+# Appendix B, structured steps for the Team Settlements rule, as given. Two
+# additions: "auto: true" runs the steps by themselves when the alert opens
+# (the escalation still waits for a second person's approval), and
+# "then: resolve" closes the alert when the retry works.
+runbook: settlement-timeout
+auto: true
+matches:
+  type: WORKFLOW_FAILED
+  "error.code": TIMEOUT
+steps:
+  - check: "Is counterparty-service healthy?"
+    action: http_get
+    url: "http://counterparty-service/health"
+  - action: retry_workflow
+    workflowId: "{{workflowId}}"
+    approval: none
+    then: resolve
+  - if: "retry fails twice"
+    action: escalate
+    team: counterparty-support
+    approval: required

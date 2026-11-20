@@ -1,0 +1,7 @@
+---
+# A link to the settlements wiki: shown on the alert, not fetched.
+runbook: eod-positions-missing
+team: settlements
+rules: [custodian-eod-positions-missing]
+---
+Custodian EOD file missing — chase procedure: https://wiki.example.com/settlements/eod-positions-missing

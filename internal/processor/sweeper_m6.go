@@ -171,6 +171,9 @@ func (p *Processor) openSynthetic(ctx context.Context, c *rules.Compiled, fp, ke
 		}
 		a.ID = res[0].ID
 		created = &a
+		if err := p.startRunbooks(ctx, tx, &a); err != nil {
+			return err
+		}
 		return alerting.InsertNotifications(ctx, tx, p.notificationsFor(ctx, &a, g, p.Directory(), p.Clock.Now()))
 	})
 	if err != nil || created == nil {

@@ -57,6 +57,10 @@ type Config struct {
 	// DemoMode enables the shared business clock offset (time travel for demos).
 	DemoMode bool
 
+	// ApprovalSecret signs one-click approval links in emails. Every replica
+	// needs the same value.
+	ApprovalSecret string
+
 	ConfigDir string // rules, teams, sources (YAML)
 
 	DedupWindow     time.Duration
@@ -101,6 +105,7 @@ func Load() (Config, error) {
 		GatewayToken:     env("GATEWAY_TOKEN", ""),
 		Fallbacks:        parsePairs(env("FALLBACKS", "phone:sms,sms:email")),
 		DemoMode:         env("DEMO_MODE", "false") == "true",
+		ApprovalSecret:   env("APPROVAL_SECRET", "dev-approval-secret-change-me"),
 		ConfigDir:        env("CONFIG_DIR", "./config"),
 		DedupWindow:      envDuration("DEDUP_WINDOW", 5*time.Minute),
 		DispatchWorkers:  envInt("DISPATCH_WORKERS", 16),

@@ -36,6 +36,8 @@ export interface Alert {
   escalatedAt?: string;
   /** Values computed when the rule fired: $count, $sum, $deadline, $lastSeen... */
   vars?: Record<string, string | number>;
+  /** Runbook steps waiting for a second person's approval. */
+  pendingApprovals?: number;
   firstSeen: string;
   lastSeen: string;
   ackedBy?: string;
@@ -245,6 +247,147 @@ export interface CalendarStatus {
   cutoffs: Deadline[];
 }
 
+export type RunStatus = "awaiting_approval" | "queued" | "running" | "succeeded" | "failed" | "rejected" | "done" | "skipped";
+
+/** One execution of a runbook step on an alert. */
+export interface Run {
+  id: string;
+  code: string;
+  alertId: string;
+  runbookId: string;
+  step: number;
+  kind: string;
+  action?: string;
+  label: string;
+  params?: Record<string, string>;
+  status: RunStatus;
+  risk: string;
+  approval: "none" | "required";
+  requestedBy: string;
+  approvedBy?: string;
+  approvedAt?: string;
+  decidedBy?: string;
+  reason?: string;
+  attempts: number;
+  maxAttempts: number;
+  notBefore: string;
+  output?: string;
+  createdAt: string;
+  finishedAt?: string;
+}
+
+export interface RunbookStep {
+  kind: "text" | "check" | "action";
+  text?: string;
+  action?: string;
+  params?: Record<string, string>;
+  approval?: string;
+  if?: string;
+  then?: string;
+  every?: string;
+  inferred?: boolean;
+}
+
+export interface Runbook {
+  id: string;
+  name: string;
+  team?: string;
+  format: "yaml" | "markdown" | "checklist" | "link" | "text";
+  url?: string;
+  summary?: string;
+  matches?: unknown;
+  rules?: string[];
+  schemas?: string[];
+  auto?: boolean;
+  steps: RunbookStep[];
+  notes?: string[];
+  source: string;
+  origin?: string;
+  editable?: boolean;
+}
+
+export interface StepCheck {
+  index: number;
+  label?: string;
+  risk?: string;
+  needs?: "none" | "approval";
+  problem?: string;
+}
+
+/** A runbook step as it applies to one alert. */
+export interface StepView extends RunbookStep {
+  index: number;
+  text: string;
+  label: string;
+  risk?: string;
+  needs: "none" | "approval";
+  runnable: boolean;
+  problem?: string;
+  missing?: string[];
+  run?: Run;
+  history?: Run[];
+}
+
+export interface RunbookView {
+  id: string;
+  name: string;
+  format: Runbook["format"];
+  url?: string;
+  summary?: string;
+  auto: boolean;
+  origin?: string;
+  why: string;
+  steps: StepView[];
+}
+
+export interface ActionDef {
+  type: string;
+  label: string;
+  description: string;
+  risk: "low" | "medium" | "high";
+  params: string[];
+  builtin: boolean;
+}
+
+export interface AuditEntry {
+  seq: number;
+  at: string;
+  actor: string;
+  action: string;
+  subject: string;
+  detail: Record<string, unknown>;
+  prevHash: string;
+  hash: string;
+}
+
+export interface Verification {
+  ok: boolean;
+  entries: number;
+  head?: string;
+  brokenAt?: number;
+  reason?: string;
+}
+
+export interface RunbookDraft {
+  source: string;
+  id?: string;
+  name?: string;
+  team?: string;
+  matches?: string;
+  rules?: string[];
+  auto?: boolean;
+  version?: number;
+}
+
+export interface ParseResult {
+  valid: boolean;
+  error?: string;
+  detected?: string;
+  runbook?: Runbook;
+  yaml?: string;
+  checks?: StepCheck[];
+}
+
 /** Which kind of rule produced an alert (absence alerts are synthetic). */
 export function alertKind(a: Alert): "event" | "aggregate" | "absence" {
   if (a.sourceId === "kardan.absence") return "absence";
@@ -398,4 +541,26 @@ export const api = {
 
   sources: () => request<SourceStatus[]>("GET", "/api/sources"),
   calendars: () => request<{ now: string; note?: string; calendars: CalendarStatus[] }>("GET", "/api/calendars"),
+
+  runbooks: () => request<{ runbooks: Runbook[]; errors: string[]; loadedAt: string }>("GET", "/api/runbooks"),
+  runbook: (id: string) =>
+    request<{ runbook: Runbook; yaml: string; editable: boolean; checks: StepCheck[]; version?: number; updatedBy?: string; updatedAt?: string }>(
+      "GET",
+      `/api/runbooks/${encodeURIComponent(id)}`,
+    ),
+  parseRunbook: (d: RunbookDraft) => request<ParseResult>("POST", "/api/runbooks/parse", d),
+  createRunbook: (d: RunbookDraft) => request<ParseResult & { version: number }>("POST", "/api/runbooks", d),
+  updateRunbook: (id: string, d: RunbookDraft) =>
+    request<ParseResult & { version: number }>("PUT", `/api/runbooks/${encodeURIComponent(id)}`, d),
+  deleteRunbook: (id: string) => request<void>("DELETE", `/api/runbooks/${encodeURIComponent(id)}`),
+  actions: () => request<ActionDef[]>("GET", "/api/actions"),
+  alertRunbooks: (id: string) => request<RunbookView[]>("GET", `/api/alerts/${id}/runbooks`),
+  runStep: (alertId: string, runbookId: string, step: number, by: string) =>
+    request<Run>("POST", `/api/alerts/${alertId}/runbooks/${encodeURIComponent(runbookId)}/steps/${step}`, { by }),
+  approve: (runId: string, by: string) => request<Run>("POST", `/api/runs/${runId}/approve`, { by }),
+  reject: (runId: string, by: string, reason = "") => request<Run>("POST", `/api/runs/${runId}/reject`, { by, reason }),
+  timeline: (alertId: string) => request<AuditEntry[]>("GET", `/api/alerts/${alertId}/timeline`),
+  audit: (prefix = "", limit = 200) => request<AuditEntry[]>("GET", `/api/audit${qs({ prefix, limit: String(limit) })}`),
+  verifyAudit: () => request<Verification>("GET", "/api/audit/verify"),
+  reportURL: (alertId: string) => `/api/alerts/${alertId}/report`,
 };

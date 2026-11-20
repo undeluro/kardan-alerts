@@ -46,14 +46,16 @@ type Alert struct {
 	Escalation   int                   `json:"escalationLevel"` // escalation steps already taken
 	EscalatedAt  *time.Time            `json:"escalatedAt,omitempty"`
 	Vars         json.RawMessage       `json:"vars,omitempty"` // computed template values ($count, $deadline...)
-	FirstSeen    time.Time             `json:"firstSeen"`
-	LastSeen     time.Time             `json:"lastSeen"`
-	AckedBy      *string               `json:"ackedBy,omitempty"`
-	AckedAt      *time.Time            `json:"ackedAt,omitempty"`
-	ResolvedBy   *string               `json:"resolvedBy,omitempty"`
-	ResolvedAt   *time.Time            `json:"resolvedAt,omitempty"`
-	CreatedAt    time.Time             `json:"createdAt"`
-	UpdatedAt    time.Time             `json:"updatedAt"`
+	// PendingApprovals counts runbook steps waiting for a second person (not stored).
+	PendingApprovals int        `json:"pendingApprovals,omitempty"`
+	FirstSeen        time.Time  `json:"firstSeen"`
+	LastSeen         time.Time  `json:"lastSeen"`
+	AckedBy          *string    `json:"ackedBy,omitempty"`
+	AckedAt          *time.Time `json:"ackedAt,omitempty"`
+	ResolvedBy       *string    `json:"resolvedBy,omitempty"`
+	ResolvedAt       *time.Time `json:"resolvedAt,omitempty"`
+	CreatedAt        time.Time  `json:"createdAt"`
+	UpdatedAt        time.Time  `json:"updatedAt"`
 }
 
 // Update is pushed to live-feed clients.

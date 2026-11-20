@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/undeluro/kardan-alerts/internal/alerting"
+	"github.com/undeluro/kardan-alerts/internal/audit"
 	"github.com/undeluro/kardan-alerts/internal/directory"
 	"github.com/undeluro/kardan-alerts/internal/platform/metrics"
 )
@@ -66,8 +67,12 @@ func (s *Server) inboundSMS(w http.ResponseWriter, r *http.Request) {
 		action = "ack"
 	case "RESOLVE", "RESOLVED", "FIXED", "DONE", "CLOSE":
 		action = "resolve"
+	case "APPROVE", "APPROVED", "REJECT", "DENY":
+		s.smsDecision(w, r, person.ID, person.Name, words, reply)
+		return
 	case "HELP", "?":
-		reply("help", "Kardan: ACK <code> acknowledges, RESOLVE <code> resolves. Without a code, your latest alert is used.")
+		reply("help", "Kardan: ACK <code> acknowledges, RESOLVE <code> resolves (without a code, your latest alert). "+
+			"APPROVE <code> or REJECT <code> decides a runbook step waiting for you.")
 		return
 	default:
 		reply("unknown_command", fmt.Sprintf("Sorry, %q is not a command. Reply HELP for options.", words[0]))
@@ -101,6 +106,8 @@ func (s *Server) inboundSMS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.publishStatus(r, a)
+	s.record(r, audit.Event{Actor: person.Name, Action: "alert." + action, Subject: "alert:" + a.ID,
+		Detail: map[string]string{"via": "sms", "from": req.From}})
 	s.Log.Info("alert updated by SMS reply", "alert", a.ID, "action", action, "by", person.ID)
 	verb := map[string]string{"ack": "Acknowledged", "resolve": "Resolved"}[action]
 	reply(action, fmt.Sprintf("%s %s: %s", verb, alerting.ShortCode(a.ID), a.Title))
@@ -142,6 +149,8 @@ func (s *Server) inboundCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.publishStatus(r, a)
+	s.record(r, audit.Event{Actor: name, Action: "alert.ack", Subject: "alert:" + a.ID,
+		Detail: map[string]string{"via": "phone", "keypress": "1"}})
 	metrics.InboundReplies.WithLabelValues("phone", "ack").Inc()
 	writeJSON(w, http.StatusOK, map[string]string{"say": "Acknowledged. Thank you."})
 }
@@ -276,5 +285,49 @@ func (s *Server) setClock(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.Log.Info("business clock shifted", "offset", d, "by", actor(r))
+	s.record(r, audit.Event{Actor: actor(r), Action: "clock.shift", Subject: "clock", Detail: map[string]string{"offset": d.String()}})
 	writeJSON(w, http.StatusOK, s.clockView())
+}
+
+// smsDecision handles APPROVE <code> / REJECT <code> replies for runbook
+// steps waiting for a second person. The sender's phone number identifies the
+// approver, so the four-eyes rule applies exactly as in the UI.
+func (s *Server) smsDecision(w http.ResponseWriter, r *http.Request, personID, name string, words []string,
+	reply func(outcome, text string)) {
+	approve := words[0] == "APPROVE" || words[0] == "APPROVED"
+	pending, err := alerting.AwaitingApproval(r.Context(), s.Store.Pool, false)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	var run *alerting.Run
+	switch {
+	case len(words) > 1:
+		for _, p := range pending {
+			if strings.EqualFold(p.Code, words[1]) {
+				run = p
+			}
+		}
+	case len(pending) == 1:
+		run = pending[0]
+	}
+	if run == nil {
+		if len(words) < 2 && len(pending) > 1 {
+			reply("ambiguous", fmt.Sprintf("%d steps wait for approval; reply APPROVE <code> with the code from the request.", len(pending)))
+			return
+		}
+		reply("not_found", "No step waits for approval with that code.")
+		return
+	}
+	reason := ""
+	if !approve && len(words) > 2 {
+		reason = strings.ToLower(strings.Join(words[2:], " "))
+	}
+	out, _, err := s.decideRun(r, run.ID, personID, approve, reason, "sms")
+	if err != nil {
+		reply("refused", "Not done: "+err.Error())
+		return
+	}
+	verb := map[bool]string{true: "Approved", false: "Rejected"}[approve]
+	reply(strings.ToLower(verb), fmt.Sprintf("%s %s: %s. Thanks, %s.", verb, out.Code, out.Label, name))
 }

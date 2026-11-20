@@ -13,7 +13,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/undeluro/kardan-alerts/internal/actions"
 	"github.com/undeluro/kardan-alerts/internal/alerting"
+	"github.com/undeluro/kardan-alerts/internal/audit"
 	"github.com/undeluro/kardan-alerts/internal/calendar"
 	"github.com/undeluro/kardan-alerts/internal/directory"
 	"github.com/undeluro/kardan-alerts/internal/event"
@@ -21,32 +23,40 @@ import (
 	"github.com/undeluro/kardan-alerts/internal/ingest"
 	"github.com/undeluro/kardan-alerts/internal/platform/clock"
 	"github.com/undeluro/kardan-alerts/internal/rules"
+	"github.com/undeluro/kardan-alerts/internal/runbooks"
+	"github.com/undeluro/kardan-alerts/internal/runner"
 	"github.com/undeluro/kardan-alerts/internal/schema"
 )
 
 type Server struct {
-	Store         *alerting.Store
-	Publisher     *alerting.Publisher
-	Engine        *rules.Engine
-	RuleStore     *rules.Store
-	Schemas       *schema.Registry
-	Directory     func() *directory.Directory
-	Sources       func() []ingest.SourceStatus // nil when this replica has no ingest role
-	ConfigErrors  func() []string
-	Notify        func(ctx context.Context, kind string) error
-	ParseRaw      func(source string, raw []byte) *event.Envelope
-	DefaultWindow time.Duration
-	Clock         *clock.Clock
-	GatewayToken  string
-	ChannelStates func(r *http.Request) map[string]string // breaker state per channel
-	FX            func() *finance.FX
-	Correlation   func() *finance.Correlation
-	Calendars     func() *calendar.Set
-	CheckRule     func(*rules.Compiled) error // reference checks (calendars, cut-offs)
-	Hub           *Hub
-	UI            fs.FS // built React app; nil when not embedded
-	Log           *slog.Logger
-	Info          map[string]any
+	Store          *alerting.Store
+	Publisher      *alerting.Publisher
+	Engine         *rules.Engine
+	RuleStore      *rules.Store
+	Schemas        *schema.Registry
+	Directory      func() *directory.Directory
+	Sources        func() []ingest.SourceStatus // nil when this replica has no ingest role
+	ConfigErrors   func() []string
+	Notify         func(ctx context.Context, kind string) error
+	ParseRaw       func(source string, raw []byte) *event.Envelope
+	DefaultWindow  time.Duration
+	Clock          *clock.Clock
+	GatewayToken   string
+	ChannelStates  func(r *http.Request) map[string]string // breaker state per channel
+	FX             func() *finance.FX
+	Correlation    func() *finance.Correlation
+	Calendars      func() *calendar.Set
+	CheckRule      func(*rules.Compiled) error // reference checks (calendars, cut-offs)
+	Runner         *runner.Runner
+	Runbooks       *runbooks.Holder
+	RunbookStore   *runbooks.Store
+	Actions        func() *actions.Registry
+	Audit          *audit.Log
+	ApprovalSecret string
+	Hub            *Hub
+	UI             fs.FS // built React app; nil when not embedded
+	Log            *slog.Logger
+	Info           map[string]any
 }
 
 func (s *Server) Register(mux *http.ServeMux) {
@@ -71,6 +81,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/incidents/{id}", s.getIncident)
 	mux.HandleFunc("GET /api/fx", s.getFX)
 	mux.HandleFunc("GET /api/calendars", s.getCalendars)
+	s.registerRunbooks(mux)
 	mux.HandleFunc("GET /api/deliveries", s.listDeliveries)
 	mux.HandleFunc("POST /api/notifications/{id}/resend", s.resend)
 	mux.HandleFunc("GET /api/channels", s.channels)
@@ -108,8 +119,15 @@ func (s *Server) listAlerts(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	for _, a := range alerts {
+	ids := make([]string, len(alerts))
+	for i, a := range alerts {
 		a.Sample, a.SampleRaw = nil, "" // keep the list light; detail view loads them
+		ids[i] = a.ID
+	}
+	if pending, err := alerting.PendingApprovals(r.Context(), s.Store.Pool, ids); err == nil {
+		for _, a := range alerts {
+			a.PendingApprovals = pending[a.ID]
+		}
 	}
 	writeJSON(w, http.StatusOK, alerts)
 }
@@ -124,6 +142,9 @@ func (s *Server) getAlert(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.fail(w, err)
 		return
+	}
+	if pending, err := alerting.PendingApprovals(r.Context(), s.Store.Pool, []string{a.ID}); err == nil {
+		a.PendingApprovals = pending[a.ID]
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"alert": a, "notifications": ns})
 }
@@ -149,6 +170,8 @@ func (s *Server) transition(action string) http.HandlerFunc {
 			s.fail(w, err)
 			return
 		}
+		s.record(r, audit.Event{Actor: by, Action: "alert." + action, Subject: "alert:" + a.ID,
+			Detail: map[string]string{"via": "ui", "title": a.Title}})
 		s.publishStatus(r, a)
 		writeJSON(w, http.StatusOK, a)
 	}

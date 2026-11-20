@@ -1,0 +1,22 @@
+# A payment rejected by the receiving bank (ISO 20022 pacs.002 RJCT): repair
+# the data, then resubmit. Resubmitting moves money, so it is a high-risk
+# action: Kardan always asks a second member of the payments team to approve
+# it, whatever this file says.
+runbook: payment-rejection
+name: Rejected payment — repair and resubmit
+team: payments
+matches:
+  $format: iso20022
+  status: RJCT
+steps:
+  - check: "Look up reason {{reasonCode}} ({{reasonName}}) and confirm the account details of {{creditor}} with the client"
+  - action: open_ticket
+    summary: "Repair payment {{endToEndId}}: {{reasonCode}} {{reasonName}}"
+    team: payments
+  - text: "Correct the creditor account or remittance data in the payments hub"
+  - action: resubmit_payment
+    endToEndId: "{{endToEndId}}"
+    then: resolve
+  - action: notify_channel
+    channel: "#payments-incidents"
+    message: "Payment {{endToEndId}} ({{currency}} {{amount}}) was rejected with {{reasonCode}}; repaired and resubmitted"

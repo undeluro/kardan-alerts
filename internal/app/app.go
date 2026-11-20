@@ -18,6 +18,7 @@ import (
 
 	"github.com/undeluro/kardan-alerts/internal/alerting"
 	"github.com/undeluro/kardan-alerts/internal/api"
+	"github.com/undeluro/kardan-alerts/internal/audit"
 	"github.com/undeluro/kardan-alerts/internal/directory"
 	"github.com/undeluro/kardan-alerts/internal/event"
 	"github.com/undeluro/kardan-alerts/internal/ingest"
@@ -29,6 +30,8 @@ import (
 	"github.com/undeluro/kardan-alerts/internal/platform/pg"
 	"github.com/undeluro/kardan-alerts/internal/processor"
 	"github.com/undeluro/kardan-alerts/internal/rules"
+	"github.com/undeluro/kardan-alerts/internal/runbooks"
+	"github.com/undeluro/kardan-alerts/internal/runner"
 	"github.com/undeluro/kardan-alerts/internal/schema"
 	"github.com/undeluro/kardan-alerts/web"
 )
@@ -88,13 +91,22 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 			InstanceID: cfg.InstanceID, Log: log.With("component", "sources")}
 	}
 
+	rbHolder := &runbooks.Holder{}
+	rbStore := &runbooks.Store{Pool: pool}
 	reloader := &Reloader{
 		ConfigDir: cfg.ConfigDir, Window: cfg.DedupWindow, Engine: engine, RuleStore: ruleStore,
 		Schemas: schemas, Sources: sources, Redis: rdb, Log: log.With("component", "config"),
+		Runbooks: rbHolder, RunbookStore: rbStore,
 	}
 	if err := reloader.LoadAll(ctx); err != nil {
 		return err
 	}
+	if cfg.ApprovalSecret == "dev-approval-secret-change-me" {
+		log.Warn("APPROVAL_SECRET is the development default; set a real secret outside demos")
+	}
+	run := &runner.Runner{Pool: pool, Catalog: rbHolder, Actions: reloader.Actions, Engine: engine, Schemas: schemas,
+		FX: reloader.FX, Directory: reloader.Directory}
+	auditLog := &audit.Log{Pool: pool}
 
 	biz := &clock.Clock{Redis: rdb, Enabled: cfg.DemoMode}
 
@@ -132,6 +144,7 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		p := &processor.Processor{
 			Kafka: cons, Pool: pool, Engine: engine, Directory: reloader.Directory, Privacy: reloader.Privacy,
 			FX: reloader.FX, Correlation: reloader.Correlation, Calendars: reloader.Calendars, Redis: rdb,
+			Runner: run, Actions: reloader.Actions, ApprovalSecret: cfg.ApprovalSecret,
 			Throttler: &notify.Throttler{Redis: rdb, Config: func() directory.Throttle { return reloader.Directory().Throttling() }},
 			Clock:     biz, Fallbacks: cfg.Fallbacks,
 			Renderer: notify.Renderer{PublicURL: cfg.PublicURL}, Publisher: publisher, Schemas: schemas,
@@ -139,6 +152,7 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		}
 		g.Go(func() error { return p.Run(ctx) })
 		g.Go(func() error { return p.RunSweeper(ctx, rdb, cfg.InstanceID, 5*time.Second) })
+		g.Go(func() error { return p.RunActions(ctx) })
 	}
 
 	if cfg.Has(config.RoleDispatcher) {
@@ -178,8 +192,10 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 			Directory: reloader.Directory, ConfigErrors: reloader.Errors, DefaultWindow: cfg.DedupWindow,
 			Clock: biz, GatewayToken: cfg.GatewayToken, FX: reloader.FX, Correlation: reloader.Correlation,
 			Calendars: reloader.Calendars, CheckRule: reloader.checkCalendars,
-			ChannelStates: func(r *http.Request) map[string]string { return channelStates(r.Context(), rdb) },
-			Notify:        func(ctx context.Context, kind string) error { return bus.NotifyConfig(ctx, rdb, kind) },
+			Runner: run, Runbooks: rbHolder, RunbookStore: rbStore, Actions: reloader.Actions, Audit: auditLog,
+			ApprovalSecret: cfg.ApprovalSecret,
+			ChannelStates:  func(r *http.Request) map[string]string { return channelStates(r.Context(), rdb) },
+			Notify:         func(ctx context.Context, kind string) error { return bus.NotifyConfig(ctx, rdb, kind) },
 			ParseRaw: func(source string, raw []byte) *event.Envelope {
 				if sources != nil {
 					return ingest.NewEnvelope(sources.ParserFor(source), source, raw, nil)

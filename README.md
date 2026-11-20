@@ -4,11 +4,12 @@
 prefer, without flooding them, for trading, settlement and payments operations. It accepts events of *any* shape
 from any source, and teams decide what reaches them with rules they edit as data, not code.
 
-> Hackathon 2026 — *Flexible Alerting & Notification Service*. Status: **Milestones 1–6 done** (end-to-end
+> Hackathon 2026 — *Flexible Alerting & Notification Service*. Status: **Milestones 1–7 done** (end-to-end
 > slice; Kafka, log-file, FIX and ISO 20022 sources; schema registry with finance field detection; live rule
 > editing; reliable delivery with on-call, preferences, masking, circuit breakers and fallbacks; money-at-risk
 > ranking, incident correlation, grouping windows, throttling and auto-resolve; window totals, missing-event
-> detection, market calendars, cut-off countdowns and escalation ladders). See [Roadmap](#roadmap) for what is next.
+> detection, market calendars, cut-off countdowns and escalation ladders; runbooks in any shape with actions,
+> four-eyes approvals and a tamper-evident audit trail). See [Roadmap](#roadmap) for what is next.
 
 ## Quick start
 
@@ -40,12 +41,23 @@ curl -X PUT localhost:8080/api/clock -d '{"at":"2026-11-26T23:31:00Z"}'   # Than
 curl -X PUT localhost:8080/api/clock -d '{"offsetMinutes":0}'             # back to real time
 ```
 
+Runbooks (Appendix B's settlement runbook runs by itself):
+
+```sh
+./samples/scenario.sh settlement-timeout     # health check passes, retry works, the alert resolves itself
+curl -X POST localhost:8091/api/state -d '{"counterpartyHealthy":false}'  # or the switch on http://localhost:8091
+./samples/scenario.sh settlement-timeout     # check fails, retry fails twice -> escalation waits for approval
+# the on-call person gets "Reply APPROVE <code>": reply in the phone simulator (:8090), or approve on the alert page
+```
+
 | What                     | Where                                                         |
 |--------------------------|---------------------------------------------------------------|
 | Live alert feed (UI)     | http://localhost:8080                                         |
 | Rules, schemas, sources  | http://localhost:8080/rules · /schemas · /sources             |
 | Every email sent         | http://localhost:8025 (Mailpit)                               |
 | SMS and calls            | http://localhost:8090 (phone simulator: reply, answer, inject provider failures) |
+| Runbooks, audit trail    | http://localhost:8080/runbooks · /audit                       |
+| What actions call        | http://localhost:8091 (mock operations: workflow engine, payments hub, trading controls…) |
 | Deliveries, on-call      | http://localhost:8080/deliveries · /teams                     |
 | Markets and cut-offs     | http://localhost:8080/markets                                 |
 | Prometheus metrics       | http://localhost:8080/metrics                                 |
@@ -158,6 +170,42 @@ Scale the workers horizontally: `docker compose up -d --scale worker=3`.
     delays shrink with the time left, down to 20%: a 10-minute step fires after 2 minutes when the cut-off is
     minutes away.
   - Rules that name an unknown calendar or cut-off are rejected when saved.
+- **Runbooks in any shape** (`config/runbooks/` or pasted in the UI).
+  - The five shapes from the brief all parse into the same steps: structured YAML (Appendix B as given), a
+    Markdown page, a checklist, a wiki link and free text from a chat.
+  - Free text and Markdown are read for instructions: "Restart the pricing-engine instance named in the alert, wait
+    2 minutes, and if latency is still high, call the pricing on-call person" becomes restart (of the alert's own
+    instance), wait 2 min, and a conditional call to the pricing on-call. Sentences with no instruction stay as
+    context, guessed actions are marked "read from text", and "needs approval from the team lead" means approval.
+  - A runbook attaches to alerts by rule, by schema, or by a `matches:` condition, so a judge's new runbook needs
+    no code.
+  - Steps show on the alert with values filled in (workflow id, service, instrument…). Email gets the full steps,
+    SMS a short link, and a call the first step, all masked like the rest of the message.
+  - The editor previews how Kardan reads the text, flags unknown actions and missing values, and converts prose
+    into structured YAML to correct.
+- **Steps that do things.**
+  - Built-in actions are `http_get`, `call_webhook`, `wait` and `escalate`. Every other kind is a few lines of
+    `config/actions.yaml` (an HTTP call with a templated URL): retry a workflow, restart a service, open a ticket,
+    post to a channel, notify Risk, fail over a feed or region, roll back, resubmit a payment, pause a desk.
+  - Requests go only to allow-listed hosts (runbook text is user input), with an idempotency key per attempt.
+  - Auto runbooks run on their own: Appendix B's settlement runbook checks counterparty health, retries the
+    workflow (twice, because the next step says "if retry fails twice"), and either resolves the alert or asks for
+    approval to escalate.
+  - Steps are a durable queue executed by any worker (SKIP LOCKED with a lease); `then: resolve` closes the alert
+    when the fix works.
+- **Four-eyes approvals.**
+  - High-risk actions (resubmit a payment, roll back, fail over a region, pause trading) always need a second
+    person, whatever the runbook says. Others need approval when the runbook asks.
+  - The approver is never the requester, and high-risk steps need a member of the alert's team. This is enforced on
+    the server for every path: UI, SMS reply `APPROVE 2C0D`, or a signed one-time link in the approval email.
+  - Approvers are the alert's on-call and team, minus the requester.
+- **Tamper-evident audit trail.**
+  - Acknowledgements, approvals and refusals, runbook actions with their results, rule, runbook and schema changes
+    and clock shifts are recorded append-only. Each entry carries the hash of the one before.
+  - `GET /api/audit/verify` (and the Audit page) recomputes the chain: editing any entry, or deleting one, is
+    reported at that exact entry.
+  - Each alert has a "who did what" timeline and a Markdown incident report export (summary, timeline, steps with
+    requester and approver, audit hashes and chain status; sensitive values masked).
 - **Live UI.** A server-sent-events feed per team (push, no refresh), ack/resolve, and a detail drawer with each
   delivery's channel, recipient, reason, fallbacks and the raw payload. The Deliveries page shows channel health
   and breaker state, the Teams page shows on-call now. In demo mode a shared business clock lets you jump to
@@ -241,6 +289,48 @@ curl -s localhost:8080/api/rules/test -d '{"ruleYaml": "...", "raw": "<any event
 Template filters: `number`, `upper`, `lower`, `default "x"`, `truncate N`, `json`. They also work in presentation
 fields: `Rejected USD=$sum | number`.
 
+## Writing a runbook
+
+Any of these work; front matter (or the editor's fields) says which alerts it belongs to.
+
+```yaml
+# config/runbooks/settlement-timeout.yaml (Appendix B, plus auto and then: resolve)
+runbook: settlement-timeout
+auto: true                       # run by itself when an alert opens
+matches: { type: WORKFLOW_FAILED, "error.code": TIMEOUT }
+steps:
+  - check: "Is counterparty-service healthy?"
+    action: http_get
+    url: "http://counterparty-service/health"
+  - action: retry_workflow
+    workflowId: "{{workflowId}}"
+    approval: none
+    then: resolve                # close the alert when this works
+  - if: "retry fails twice"
+    action: escalate
+    team: counterparty-support
+    approval: required
+```
+
+```markdown
+---
+runbook: pricing-latency
+matches: { $service: "pricing-engine-*" }
+---
+When pricing latency goes over a second, it's usually the cache. Restart the pricing-engine instance named in
+the alert, wait 2 minutes, and if latency is still high, call the pricing on-call person.
+```
+
+A new kind of action is an entry in `config/actions.yaml`:
+
+```yaml
+- type: resubmit_payment
+  label: "Resubmit payment {{endToEndId}}"
+  risk: high                     # always four-eyes
+  params: [endToEndId]
+  request: { method: POST, url: "{{ops}}/payments/{{endToEndId}}/resubmit" }
+```
+
 ## API
 
 | Method | Path | |
@@ -264,7 +354,17 @@ fields: `Rejected USD=$sum | number`.
 | POST | `/api/notifications/{id}/resend` | re-queue a dead or waiting delivery |
 | GET | `/api/channels` | per-channel health, latency and circuit-breaker state |
 | GET | `/api/oncall` · GET/PUT `/api/clock` | who is on call now · business clock (demo mode) |
-| POST | `/inbound/sms` · `/inbound/call` | provider webhooks for replies and keypad presses (token required) |
+| GET · POST | `/api/runbooks` | list / create (`{source, name, team, matches, rules, auto}` or raw text) |
+| GET · PUT · DELETE | `/api/runbooks/{id}` | detail with structured YAML / update / delete (or remove a UI override) |
+| POST | `/api/runbooks/parse` | preview: format, steps, actions, approvals, problems, YAML |
+| GET | `/api/actions` | action kinds with risk and parameters |
+| GET | `/api/alerts/{id}/runbooks` | attached runbooks with filled steps and their runs |
+| POST | `/api/alerts/{id}/runbooks/{rb}/steps/{n}` | run a step (or mark a manual one done) as `{"by"}` |
+| POST | `/api/runs/{id}/approve` · `/reject` | four-eyes decision as `{"by"}` |
+| GET | `/approve/{token}` | signed one-click approval page (from approval emails) |
+| GET | `/api/audit?prefix=&subject=` · `/api/audit/verify` | audit trail · chain verification |
+| GET | `/api/alerts/{id}/timeline` · `/report` | who did what · Markdown incident report |
+| POST | `/inbound/sms` · `/inbound/call` | provider webhooks for replies (ACK, RESOLVE, APPROVE, REJECT) and keypad presses (token required) |
 | GET | `/api/teams` · `/api/stats` · `/api/info` | directory, counters, facets, operators, config errors |
 
 ## Development
@@ -286,7 +386,8 @@ Configuration is through environment variables with working defaults; see `inter
 | SMS / voice provider | `cmd/fakegw`: same contract as a real provider (HTTP API, idempotency keys, inbound reply webhooks), with a phone simulator and failure injection. A real provider is one more `notify.Channel` |
 | Kafka | Redpanda (Kafka API compatible, single node) |
 | Market calendars | `config/calendars.yaml` with illustrative hours, cut-offs and 2026 holidays; a real deployment would load them from a reference-data service |
-| Authentication / SSO | None yet: actions record a free-text "acting as" name (entitlements: M7) |
+| Operations systems runbooks act on | `cmd/mockops`: workflow engine, service manager, ticketing, chat, risk, market data, regions, deployments, payments hub and trading controls, with idempotency and a page to break `counterparty-service`. Real systems are entries in `config/actions.yaml` |
+| Authentication / SSO | The "acting as" box picks a person from `teams.yaml`; approvals check that person (four-eyes, team entitlement). SMS replies are identified by phone number, email links by signature. A real deployment would take identity from SSO |
 
 ## Roadmap
 
@@ -298,7 +399,8 @@ Configuration is through environment variables with working defaults; see `inter
    circuit breakers~~ ✔
 5. ~~Grouping digests, throttling, auto-resolve, FX-normalised dollar impact, incident correlation~~ ✔
 6. ~~`aggregate` and `absence` rules, market calendars, cut-off countdowns and escalation ladders~~ ✔
-7. Runbooks (YAML / Markdown / free text) with actions, four-eyes approvals and a hash-chained audit trail
+7. ~~Runbooks (YAML / Markdown / checklist / link / free text) with actions, four-eyes approvals and a hash-chained
+   audit trail~~ ✔
 8. Rule builder with dry-run on recent events, onboarding wizard
 9. AI-assisted runbook structuring and rule drafting (opt-in)
 10. Load tests (p50/p99 measured, 1 vs 3 replicas)

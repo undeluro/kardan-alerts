@@ -332,6 +332,26 @@ kardan-alerts/
   (`impact = base_impact + urgency`); escalations use a conditional update per level, so concurrent sweepers
   cannot double-escalate.
 
+## Implementation notes (M7)
+
+- **One model for every shape:** YAML, Markdown, checklists, links and free text parse into steps (text, check,
+  action) with templated parameters. Prose is read by a small rule-based reader (verbs, "if … :" conditions,
+  "and <verb>" splits, approval phrases); its guesses are marked so people confirm them, and the UI can turn prose
+  into YAML. The AI structurer (M9) will plug in behind the same model.
+- **Actions as data:** built-ins in code, everything else in `config/actions.yaml` as an HTTP call. Risk comes from
+  the action kind, not the runbook, so pasted text cannot lower it. There is a host allow-list for SSRF and an
+  idempotency key per attempt (a deliberate retry must reach the target again).
+- **Runs are a queue:** `action_runs` rows are claimed with `FOR UPDATE SKIP LOCKED` and a lease by any worker;
+  progression ("if retry fails twice" sets the previous step's attempts to 2; conditional steps are skipped after
+  a success) happens in the transaction that records the result. Approvers are notified by the executor, so
+  requests from the UI and from automation go through one path.
+- **Four-eyes on the server:** a known person, not the requester, and a member of the alert's team for high-risk
+  actions, for UI, SMS (`APPROVE <code>`, identified by phone number) and signed email links (HMAC, 24 h, single
+  use through the run's state).
+- **Audit chain:** `audit_log` rows are appended under a transaction-scoped advisory lock with the previous hash;
+  details are stored as text so the hashed bytes are exact. Verify walks the chain and reports the first entry
+  that was changed or is missing. Reports leave out the raw event (it holds unmasked data).
+
 ## Milestones
 
 1. **Skeleton** — go.mod, compose (redpanda, postgres, redis, mailpit), role switch, migrations, React scaffold

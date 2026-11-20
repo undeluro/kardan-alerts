@@ -1,0 +1,14 @@
+---
+# Appendix B, the Markdown page written by people for the payments rule.
+# Only this front matter is added, to say which alerts it belongs to.
+runbook: payments-high-error-rate
+team: payments
+matches:
+  alertname: HighErrorRate
+  "labels.service": payments-api
+---
+# HighErrorRate on payments-api
+1. Open the payments dashboard and check if errors are in one region only.
+2. If one region: fail traffic over to the other region (needs approval from the team lead).
+3. If all regions: check the last deployment and roll it back.
+4. Post an update in the #payments-incidents channel every 15 minutes.

@@ -20,6 +20,7 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/twmb/franz-go/pkg/kgo"
 
+	"github.com/undeluro/kardan-alerts/internal/actions"
 	"github.com/undeluro/kardan-alerts/internal/alerting"
 	"github.com/undeluro/kardan-alerts/internal/calendar"
 	"github.com/undeluro/kardan-alerts/internal/directory"
@@ -30,6 +31,7 @@ import (
 	"github.com/undeluro/kardan-alerts/internal/platform/metrics"
 	"github.com/undeluro/kardan-alerts/internal/privacy"
 	"github.com/undeluro/kardan-alerts/internal/rules"
+	"github.com/undeluro/kardan-alerts/internal/runner"
 	"github.com/undeluro/kardan-alerts/internal/schema"
 )
 
@@ -43,14 +45,18 @@ type Processor struct {
 	Correlation func() *finance.Correlation
 	Calendars   func() *calendar.Set
 	Redis       *redis.Client // aggregate windows and absence state
-	Throttler   *notify.Throttler
-	Clock       *clock.Clock      // business time for working hours and on-call
-	Fallbacks   map[string]string // channel -> fallback channel, e.g. sms -> email
-	Renderer    notify.Renderer
-	Publisher   *alerting.Publisher
-	Schemas     *schema.Registry
-	BatchSize   int
-	Log         *slog.Logger
+	Runner      *runner.Runner
+	Actions     func() *actions.Registry
+	// ApprovalSecret signs one-click approval links in emails.
+	ApprovalSecret string
+	Throttler      *notify.Throttler
+	Clock          *clock.Clock      // business time for working hours and on-call
+	Fallbacks      map[string]string // channel -> fallback channel, e.g. sms -> email
+	Renderer       notify.Renderer
+	Publisher      *alerting.Publisher
+	Schemas        *schema.Registry
+	BatchSize      int
+	Log            *slog.Logger
 }
 
 // Run polls batches until ctx ends. Offsets are committed only after the
@@ -428,6 +434,11 @@ func (p *Processor) processBatch(ctx context.Context, recs []*kgo.Record) error 
 				return err
 			}
 			for _, id := range createdOrder {
+				if err := p.startRunbooks(ctx, tx, created[id]); err != nil {
+					return err
+				}
+			}
+			for _, id := range createdOrder {
 				a := created[id]
 				if inc, ok := incidents[id]; ok {
 					a.IncidentID = &inc
@@ -607,6 +618,8 @@ func (p *Processor) notificationsFor(ctx context.Context, a *alerting.Alert, g *
 	pol := p.Privacy()
 	classify := p.classifier(g.first, g.kinds)
 	masked := map[privacy.Level]*alerting.Alert{}
+	books := map[privacy.Level][]notify.RunbookSummary{}
+	attached := p.attachedRunbooks(a, g)
 	render := func(channel string) notify.Message {
 		lvl := pol.ChannelLevel(channel)
 		ma, ok := masked[lvl]
@@ -630,8 +643,9 @@ func (p *Processor) notificationsFor(ctx context.Context, a *alerting.Alert, g *
 			}
 			ma = &cp
 			masked[lvl] = ma
+			books[lvl] = p.runbookSummaries(attached, a, get) // steps masked like the rest
 		}
-		return p.Renderer.Render(channel, ma)
+		return p.Renderer.RenderWithRunbooks(channel, ma, books[lvl])
 	}
 
 	kind := g.kind

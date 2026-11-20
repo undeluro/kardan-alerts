@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { alertKind, api, type Alert, type Notification } from "./api";
 import { splitCutoffName, useBusinessNow } from "./clock";
+import { RunbookPanel } from "./RunbookPanel";
 import { Badge, Button, CutoffChip, EscalationBadge, KindBadge, RuleKindChip, statusBadge, timeAgo, toneFor } from "./ui";
 
 interface Props {
@@ -110,6 +111,8 @@ export function AlertDrawer({ id, live, now, onClose, onAck, onResolve }: Props)
                 <Info key={f.label} label={f.label} value={f.value} mono sensitive={f.sensitive} />
               ))}
             </section>
+
+            <RunbookPanel alertId={a.id} resolved={a.status === "resolved"} now={now} />
 
             <section className="border-b border-gray-200 p-5 dark:border-gray-800">
               <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Deliveries</h3>

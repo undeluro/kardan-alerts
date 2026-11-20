@@ -133,6 +133,8 @@ export function KindBadge({ kind }: { kind?: string }) {
     return <Badge className="bg-violet-50 text-violet-700 ring-violet-600/20 dark:bg-violet-500/10 dark:text-violet-300">digest</Badge>;
   if (kind === "resolved")
     return <Badge className="bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-300">all clear</Badge>;
+  if (kind === "approval")
+    return <Badge className="bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-600/20 dark:bg-fuchsia-500/10 dark:text-fuchsia-300">approval request</Badge>;
   if (kind === "escalation")
     return <Badge className="bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-600/20 dark:bg-fuchsia-500/10 dark:text-fuchsia-300">escalation</Badge>;
   return null;
@@ -227,4 +229,15 @@ export function RuleKindChip({ kind }: { kind?: string }) {
       </Badge>
     );
   return null;
+}
+
+/** "15m0s" -> "15 min", "1h0m0s" -> "1 h", "30s" -> "30 s" */
+export function humanEvery(d: string): string {
+  const m = /^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/.exec(d);
+  if (!m) return d;
+  const [h, min, s] = [Number(m[1] ?? 0), Number(m[2] ?? 0), Number(m[3] ?? 0)];
+  if (h && !min) return `${h} h`;
+  if (h) return `${h} h ${min} min`;
+  if (min) return `${min} min`;
+  return `${s} s`;
 }

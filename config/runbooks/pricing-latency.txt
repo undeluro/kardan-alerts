@@ -1,0 +1,10 @@
+---
+# Appendix B, free text copied from a wiki or a chat message. Only this front
+# matter is added: it applies to alerts from any pricing-engine instance.
+runbook: pricing-latency
+name: Pricing latency (from the wiki)
+team: pricing
+matches:
+  $service: "pricing-engine-*"
+---
+When pricing latency goes over a second, it's usually the cache. Restart the pricing-engine instance named in the alert, wait 2 minutes, and if latency is still high, call the pricing on-call person.

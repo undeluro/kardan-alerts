@@ -21,6 +21,8 @@ x-kardan: &kardan
     GATEWAY_PUBLIC_URL: http://localhost:8090
     GATEWAY_TOKEN: dev-gateway-token # shared secret for SMS/voice calls and inbound replies
     DEMO_MODE: "true"                # allows shifting the business clock from the Teams page
+    APPROVAL_SECRET: dev-approval-secret # signs one-click approval links in emails (same on every replica)
+    MOCKOPS_URL: http://mockops        # where runbook actions go (config/actions.yaml)
   volumes:
     - ./config:/app/config:ro # edit rules/teams without rebuilding
   depends_on:
@@ -70,6 +72,29 @@ services:
       - "8090:8090"
     depends_on:
       api: { condition: service_started }
+
+  # Simulated operations estate that runbook actions call: workflow engine,
+  # service manager, ticketing, payments hub, market data, trading controls.
+  # Also answers as counterparty-service (Appendix B's health check).
+  mockops:
+    image: kardan:dev
+    pull_policy: never
+    restart: unless-stopped
+    entrypoint: ["mockops"]
+    environment:
+      MOCKOPS_ADDR: ":80"
+    sysctls:
+      net.ipv4.ip_unprivileged_port_start: 0 # non-root process on port 80
+    healthcheck:
+      test: ["CMD", "mockops", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      default:
+        aliases: [counterparty-service]
+    ports:
+      - "8091:80"
 
   redpanda:
     image: redpandadata/redpanda:v25.1.1
