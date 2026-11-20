@@ -40,6 +40,12 @@ type Alert struct {
 	IncidentID   *string               `json:"incidentId,omitempty"`
 	WindowStart  *time.Time            `json:"windowStart,omitempty"` // grouped alerts: digest window
 	WindowEnd    *time.Time            `json:"windowEnd,omitempty"`
+	CutoffName   *string               `json:"cutoffName,omitempty"` // the deadline this alert races against
+	CutoffAt     *time.Time            `json:"cutoffAt,omitempty"`
+	BaseImpact   int                   `json:"-"`               // impact before cut-off urgency
+	Escalation   int                   `json:"escalationLevel"` // escalation steps already taken
+	EscalatedAt  *time.Time            `json:"escalatedAt,omitempty"`
+	Vars         json.RawMessage       `json:"vars,omitempty"` // computed template values ($count, $deadline...)
 	FirstSeen    time.Time             `json:"firstSeen"`
 	LastSeen     time.Time             `json:"lastSeen"`
 	AckedBy      *string               `json:"ackedBy,omitempty"`

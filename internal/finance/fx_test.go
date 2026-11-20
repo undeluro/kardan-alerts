@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/undeluro/kardan-alerts/internal/event"
 	"github.com/undeluro/kardan-alerts/internal/schema"
@@ -77,5 +78,18 @@ func TestCorrelationKey(t *testing.T) {
 	_ = os.WriteFile(p, []byte("window: soon\n"), 0o644)
 	if _, err := LoadCorrelation(p); err == nil {
 		t.Error("bad window should fail")
+	}
+}
+
+func TestUrgency(t *testing.T) {
+	cut := time.Date(2026, 11, 20, 16, 0, 0, 0, time.UTC)
+	cases := map[time.Duration]int{3 * time.Hour: 0, 2 * time.Hour: 0, time.Hour: 10, 30 * time.Minute: 15, 0: 20, -time.Hour: 20}
+	for before, want := range cases {
+		if got := Urgency(cut, cut.Add(-before)); got != want {
+			t.Errorf("%v before cut-off: urgency %d, want %d", before, got, want)
+		}
+	}
+	if Urgency(time.Time{}, cut) != 0 {
+		t.Error("no cut-off, no urgency")
 	}
 }

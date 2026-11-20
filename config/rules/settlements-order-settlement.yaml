@@ -26,3 +26,8 @@ presentation:
 dedup:
   key: "{{step}}|{{error.code}}"
 runbooks: [settlement-timeout]
+# Settlement must complete before the payment system's cut-off for the
+# trade currency; if nobody acknowledges in 10 minutes, phone the whole team.
+cutoff: auto
+escalation:
+  - { after: 10m, to: team:settlements, channels: [phone, sms] }

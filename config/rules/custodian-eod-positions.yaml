@@ -1,0 +1,29 @@
+# Absence (deadline): every NYSE business day, each custodian must deliver
+# its end-of-day positions file by 18:30 New York time. Weekends and NYSE
+# holidays (calendars.yaml) expect nothing. The alert resolves itself, with
+# an all-clear, when the late file arrives.
+id: custodian-eod-positions-missing
+name: Custodian EOD positions file missing
+team: settlements
+kind: absence
+match:
+  all:
+    - { field: type, op: eq, value: EOD_POSITIONS }
+absence:
+  by: custodian
+  expect: [BNYM, STATESTREET, JPM-CUSTODY]
+  deadline: "18:30"
+  calendar: XNYS
+routing:
+  - { to: oncall:settlements, channels: [sms] }
+  - { to: team:settlements,   channels: [email, ui] }
+presentation:
+  title: "EOD positions from {{$key}} not received by {{$deadline}}"
+  body: "{{$reason}}. Last file from {{$key}}: {{$lastSeen}}. Position reconciliation and tomorrow's funding forecast are blocked until it arrives."
+  severity: error
+  fields:
+    - Custodian=$key
+    - Deadline=$deadline
+    - Last file=$lastSeen
+escalation:
+  - { after: 30m, to: team:settlements, channels: [phone] }

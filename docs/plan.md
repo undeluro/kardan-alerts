@@ -321,6 +321,17 @@ kardan-alerts/
 - **Impact:** severity base (60/45/25/10) + up to 40 points for money (6.5 x log10(1 + USD/1000)); incidents
   add up to 15 for several correlated alerts. Cut-off urgency comes in M6.
 
+## Implementation notes (M6)
+
+- **Time-aware rules:** aggregate windows are Redis sorted sets (member = event id + value, so replays are
+  idempotent); a single Lua script adds, trims and totals. Absence state is a Redis hash of "last seen" per
+  sender, holding real and business time: heartbeats measure real silence, deadlines compare against the
+  business day so the demo clock can jump past them. Absence alerts are synthetic (source `kardan.absence`); the
+  computed template values (`$count`, `$deadline`…) are stored with the alert (`vars`) so escalations re-render
+  the same text with channel masking. Cut-off urgency is refreshed by the sweeper every tick
+  (`impact = base_impact + urgency`); escalations use a conditional update per level, so concurrent sweepers
+  cannot double-escalate.
+
 ## Milestones
 
 1. **Skeleton** — go.mod, compose (redpanda, postgres, redis, mailpit), role switch, migrations, React scaffold

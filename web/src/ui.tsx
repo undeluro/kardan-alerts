@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { cutoffUrgency, shortDuration, splitCutoffName, type Urgency } from "./clock";
 
 // Full class strings so Tailwind can see them at build time.
 export const tone: Record<string, { stripe: string; badge: string; dot: string }> = {
@@ -132,6 +133,8 @@ export function KindBadge({ kind }: { kind?: string }) {
     return <Badge className="bg-violet-50 text-violet-700 ring-violet-600/20 dark:bg-violet-500/10 dark:text-violet-300">digest</Badge>;
   if (kind === "resolved")
     return <Badge className="bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-300">all clear</Badge>;
+  if (kind === "escalation")
+    return <Badge className="bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-600/20 dark:bg-fuchsia-500/10 dark:text-fuchsia-300">escalation</Badge>;
   return null;
 }
 
@@ -171,3 +174,57 @@ export function Notice({ tone: t = "info", children }: { tone?: "info" | "warn" 
 
 export const inputClass =
   "w-full rounded-md border-0 bg-white px-2.5 py-1.5 text-sm text-gray-900 ring-1 ring-gray-300 ring-inset placeholder:text-gray-400 focus:ring-2 focus:ring-amber-500 dark:bg-gray-950 dark:text-gray-100 dark:ring-gray-700";
+
+const urgencyTone: Record<Urgency, string> = {
+  missed: "bg-red-600 text-white ring-red-600 dark:bg-red-500 dark:ring-red-500",
+  critical: "bg-red-50 text-red-700 ring-red-600/30 dark:bg-red-500/15 dark:text-red-200 dark:ring-red-400/40",
+  soon: "bg-amber-50 text-amber-900 ring-amber-600/30 dark:bg-amber-500/15 dark:text-amber-200 dark:ring-amber-400/40",
+  later: "bg-gray-50 text-gray-700 ring-gray-300 dark:bg-gray-800 dark:text-gray-300 dark:ring-gray-700",
+};
+
+/** "⏱ 47 min to Fedwire customer transfers" — the deadline an alert races against. */
+export function CutoffChip({ name, at, now, resolved }: { name: string; at: string; now: number; resolved?: boolean }) {
+  const [label, cal] = splitCutoffName(name);
+  const { left, level } = cutoffUrgency(at, now);
+  const when = new Date(at).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit", timeZoneName: "short" });
+  const title = `${label}${cal ? ` (${cal})` : ""} at ${when}. Impact rises as it nears; escalations tighten in the last hour.`;
+  if (resolved)
+    return (
+      <Badge className={urgencyTone.later}>
+        <span title={title}>⏱ {label}</span>
+      </Badge>
+    );
+  return (
+    <Badge className={urgencyTone[level]}>
+      <span title={title} className="tabular-nums">
+        ⏱ {level === "missed" ? `missed ${label} by ${shortDuration(left)}` : `${shortDuration(left)} to ${label}`}
+      </span>
+    </Badge>
+  );
+}
+
+export function EscalationBadge({ level }: { level: number }) {
+  if (!level) return null;
+  return (
+    <Badge className="bg-fuchsia-50 text-fuchsia-700 ring-fuchsia-600/20 dark:bg-fuchsia-500/10 dark:text-fuchsia-300 dark:ring-fuchsia-400/30">
+      <span title="Not acknowledged in time: the next level of the escalation ladder was notified">↑ escalated{level > 1 ? ` ×${level}` : ""}</span>
+    </Badge>
+  );
+}
+
+/** What kind of rule produced the alert: a window total, or a missing event. */
+export function RuleKindChip({ kind }: { kind?: string }) {
+  if (kind === "aggregate")
+    return (
+      <Badge className="bg-indigo-50 text-indigo-700 ring-indigo-600/20 dark:bg-indigo-500/10 dark:text-indigo-300 dark:ring-indigo-400/30">
+        <span title="Fired because a total over a sliding window crossed a threshold">Σ window</span>
+      </Badge>
+    );
+  if (kind === "absence")
+    return (
+      <Badge className="bg-slate-100 text-slate-700 ring-slate-500/30 dark:bg-slate-500/15 dark:text-slate-200 dark:ring-slate-400/30">
+        <span title="Fired because an expected event did not arrive">∅ missing</span>
+      </Badge>
+    );
+  return null;
+}

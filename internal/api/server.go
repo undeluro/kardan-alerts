@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/undeluro/kardan-alerts/internal/alerting"
+	"github.com/undeluro/kardan-alerts/internal/calendar"
 	"github.com/undeluro/kardan-alerts/internal/directory"
 	"github.com/undeluro/kardan-alerts/internal/event"
 	"github.com/undeluro/kardan-alerts/internal/finance"
@@ -40,6 +41,8 @@ type Server struct {
 	ChannelStates func(r *http.Request) map[string]string // breaker state per channel
 	FX            func() *finance.FX
 	Correlation   func() *finance.Correlation
+	Calendars     func() *calendar.Set
+	CheckRule     func(*rules.Compiled) error // reference checks (calendars, cut-offs)
 	Hub           *Hub
 	UI            fs.FS // built React app; nil when not embedded
 	Log           *slog.Logger
@@ -67,6 +70,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/incidents", s.listIncidents)
 	mux.HandleFunc("GET /api/incidents/{id}", s.getIncident)
 	mux.HandleFunc("GET /api/fx", s.getFX)
+	mux.HandleFunc("GET /api/calendars", s.getCalendars)
 	mux.HandleFunc("GET /api/deliveries", s.listDeliveries)
 	mux.HandleFunc("POST /api/notifications/{id}/resend", s.resend)
 	mux.HandleFunc("GET /api/channels", s.channels)

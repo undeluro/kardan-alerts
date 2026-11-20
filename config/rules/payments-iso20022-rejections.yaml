@@ -1,4 +1,7 @@
 # Payments: an ISO 20022 status report (pacs.002) rejecting a payment.
+# The repair races the payment system's cut-off for its currency (T2 for EUR,
+# Fedwire for USD, CHAPS for GBP): the alert shows the countdown, its impact
+# rises as the cut-off nears, and the escalation ladder tightens.
 id: payments-iso20022-rejections
 name: Payment rejected (ISO 20022 status report)
 team: payments
@@ -21,3 +24,7 @@ presentation:
     - Message=messageType
 dedup:
   key: "{{endToEndId}}"
+cutoff: auto
+escalation:
+  - { after: 15m, to: oncall:payments, channels: [sms] }
+  - { after: 30m, to: team:payments,   channels: [phone] }

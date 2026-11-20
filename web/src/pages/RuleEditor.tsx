@@ -281,6 +281,28 @@ function TestPanel({
         )}
         {testing && <span className="ml-auto text-xs text-gray-400">checking…</span>}
       </div>
+      {hasSample && test.matches && (test.timeNote || test.during || test.cutoff) && (
+        <div className="mt-2 space-y-1 text-xs text-gray-700 dark:text-gray-300">
+          {test.timeNote && <div>{test.timeNote}</div>}
+          {test.during && (
+            <div>
+              {test.during.calendar} is <b>{test.during.open ? "open" : "closed"}</b> now
+              {test.during.open
+                ? ": the alert goes out as configured."
+                : test.during.otherwise === "suppress"
+                  ? ": the event would be ignored."
+                  : `: the alert would be downgraded to ${test.during.otherwise} and stay in the UI.`}
+            </div>
+          )}
+          {test.cutoff && (
+            <div>
+              ⏱ races <b>{test.cutoff.name}</b> at{" "}
+              {new Date(test.cutoff.at).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit", timeZoneName: "short" })}{" "}
+              ({test.cutoff.minutesLeft > 0 ? `${test.cutoff.minutesLeft} min left` : "missed"}; urgency +{test.cutoff.urgency} impact)
+            </div>
+          )}
+        </div>
+      )}
 
       {fieldRows.length > 0 && hasSample && (
         <table className="mt-3 w-full text-xs">

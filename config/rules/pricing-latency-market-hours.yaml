@@ -1,0 +1,25 @@
+# Market hours: quote latency above 2 s is critical while London trades
+# (SMS the pricing team), but only information outside trading hours, when
+# it stays in the UI and nobody is woken up.
+id: pricing-latency-market-hours
+name: Quote latency during London trading hours
+team: pricing
+match:
+  all:
+    - { field: $service,  op: glob, value: "pricing-engine-*" }
+    - { field: latencyMs, op: gte,  value: 2000 }
+during:
+  calendar: XLON
+  otherwise: info
+routing:
+  - { to: team:pricing, channels: [sms, ui] }
+presentation:
+  title: "Quote latency {{latencyMs}} ms on {{instrument}} ({{$service}})"
+  body: "{{message}}"
+  severity: critical
+  fields:
+    - Instrument=instrument
+    - Latency ms=latencyMs
+    - Instance=$service
+dedup:
+  key: "{{instrument}}"

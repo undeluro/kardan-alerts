@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { api, type RuleView } from "../api";
+import { api, type Rule, type RuleView } from "../api";
 import { Link } from "../router";
-import { Badge, Button, Card, Notice, PageHeader, toneFor } from "../ui";
+import { Badge, Button, Card, Notice, PageHeader, RuleKindChip, toneFor } from "../ui";
 import { navigate } from "../router";
 
 const channelIcon: Record<string, string> = { email: "✉", sms: "💬", phone: "📞", ui: "🖥" };
@@ -73,8 +73,10 @@ export function RulesPage() {
                   <span className="font-medium text-gray-900 dark:text-gray-50">{r.name || r.id}</span>
                   {!r.enabled && <Badge className="bg-gray-100 text-gray-600 ring-gray-300">disabled</Badge>}
                   <OriginBadge origin={r.origin} overrides={r.overrides} />
+                  <RuleKindChip kind={r.kind} />
                 </div>
                 <div className="mt-0.5 font-mono text-xs text-gray-500">{r.id}</div>
+                <TimeSummary rule={r} />
                 <div className="mt-1.5 flex flex-wrap gap-1.5">
                   {r.fields.map((f) => (
                     <code key={f} className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[11px] text-gray-700 dark:bg-gray-800 dark:text-gray-300">
@@ -115,3 +117,37 @@ export function OriginBadge({ origin, overrides }: { origin?: string; overrides?
     </Badge>
   );
 }
+
+/** One line describing the time-aware parts of a rule. */
+export function TimeSummary({ rule: r }: { rule: Rule }) {
+  const parts: string[] = [];
+  if (r.kind === "aggregate" && r.aggregate) {
+    const a = r.aggregate;
+    const by = a.by?.length ? ` per ${a.by.join(" + ")}` : "";
+    parts.push(
+      a.sum
+        ? `fires when the sum of ${a.sum}${by} reaches ${a.threshold.toLocaleString()} in ${a.window}`
+        : `fires on the ${ordinal(a.threshold)} matching event${by} within ${a.window}`,
+    );
+  }
+  if (r.kind === "absence" && r.absence) {
+    const a = r.absence;
+    const who = a.by ? ` per ${a.by}${a.expect?.length ? ` (${a.expect.join(", ")})` : ""}` : "";
+    parts.push(
+      a.deadline
+        ? `expects an event${who} by ${a.deadline} every ${a.calendar} business day`
+        : `expects an event${who} at least every ${a.every}${a.calendar ? ` while ${a.calendar} is open` : ""}`,
+    );
+  }
+  if (r.during) parts.push(`only during ${r.during.calendar} hours (otherwise ${r.during.otherwise})`);
+  if (r.cutoff) parts.push(r.cutoff === "auto" ? "races the currency's cut-off" : `races ${r.cutoff}`);
+  if (r.escalation?.length) parts.push(`escalates ${r.escalation.map((e) => `${e.after} → ${e.to}`).join(", ")}`);
+  if (!parts.length) return null;
+  return <div className="mt-1 text-xs text-gray-600 dark:text-gray-400">⏱ {parts.join(" · ")}</div>;
+}
+
+const ordinal = (n: number) => {
+  const s = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+};

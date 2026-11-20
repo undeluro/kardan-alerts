@@ -29,6 +29,13 @@ export interface Alert {
   incidentId?: string;
   windowStart?: string;
   windowEnd?: string;
+  /** The payment / settlement cut-off this alert races against. */
+  cutoffName?: string;
+  cutoffAt?: string;
+  escalationLevel: number;
+  escalatedAt?: string;
+  /** Values computed when the rule fired: $count, $sum, $deadline, $lastSeen... */
+  vars?: Record<string, string | number>;
   firstSeen: string;
   lastSeen: string;
   ackedBy?: string;
@@ -177,6 +184,12 @@ export interface Rule {
   presentation?: { title?: string; body?: string; fields?: string[]; severity?: string; color?: string };
   dedup?: { key?: string; window?: string };
   runbooks?: string[];
+  kind?: "event" | "aggregate" | "absence";
+  aggregate?: { by?: string[]; window: string; sum?: string; threshold: number };
+  absence?: { by?: string; expect?: string[]; deadline?: string; every?: string; calendar?: string };
+  during?: { calendar: string; otherwise: string };
+  cutoff?: string;
+  escalation?: { after: string; to: string; channels: string[] }[];
   origin?: string;
   overrides?: string;
 }
@@ -208,6 +221,35 @@ export interface TestResult {
   impact?: number;
   incidentKey?: string;
   window?: { start: string; end: string };
+  kind?: string;
+  timeNote?: string;
+  during?: { calendar: string; open: boolean; otherwise: string };
+  cutoff?: { name: string; at: string; minutesLeft: number; urgency: number };
+}
+
+export interface Deadline {
+  calendar: string;
+  name: string;
+  at: string;
+}
+
+export interface CalendarStatus {
+  id: string;
+  name: string;
+  timezone: string;
+  localTime: string;
+  businessDay: boolean;
+  open: boolean;
+  hours?: string;
+  holiday: boolean;
+  cutoffs: Deadline[];
+}
+
+/** Which kind of rule produced an alert (absence alerts are synthetic). */
+export function alertKind(a: Alert): "event" | "aggregate" | "absence" {
+  if (a.sourceId === "kardan.absence") return "absence";
+  if (a.vars && "$window" in a.vars) return "aggregate";
+  return "event";
 }
 
 export interface FieldInfo {
@@ -355,4 +397,5 @@ export const api = {
     request<SchemaDetail>("PUT", `/api/schemas/${id}`, { name, facets }),
 
   sources: () => request<SourceStatus[]>("GET", "/api/sources"),
+  calendars: () => request<{ now: string; note?: string; calendars: CalendarStatus[] }>("GET", "/api/calendars"),
 };

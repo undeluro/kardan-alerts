@@ -63,7 +63,7 @@ var _ schema.Converter = (*FX)(nil)
 
 // Impact ranks alerts 0-100: severity sets the base, money at risk adds up to
 // 40 points on a log scale ($1M ≈ +20, $25M ≈ +29, $1bn ≈ +39), and
-// urgency (time to a settlement cut-off, milestone 6) adds the rest.
+// Urgency (time to a settlement cut-off) adds up to 20 more.
 func Impact(severity string, notionalUSD float64, hasNotional bool) int {
 	base := map[schema.Level]float64{
 		schema.LevelCritical: 60, schema.LevelError: 45, schema.LevelWarning: 25, schema.LevelInfo: 10,
@@ -124,4 +124,22 @@ func (c *Correlation) Key(d *schema.Doc) (field, value string) {
 		}
 	}
 	return "", ""
+}
+
+// Urgency adds up to 20 impact points as a cut-off approaches: nothing until
+// two hours before, rising linearly to 20 at the deadline, and 20 once it has
+// been missed while the alert is still open.
+func Urgency(cutoff, now time.Time) int {
+	if cutoff.IsZero() {
+		return 0
+	}
+	left := cutoff.Sub(now)
+	switch {
+	case left <= 0:
+		return 20
+	case left >= 2*time.Hour:
+		return 0
+	default:
+		return int(math.Round(20 * (1 - left.Minutes()/120)))
+	}
 }

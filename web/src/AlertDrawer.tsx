@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { api, type Alert, type Notification } from "./api";
-import { Badge, Button, KindBadge, statusBadge, timeAgo, toneFor } from "./ui";
+import { alertKind, api, type Alert, type Notification } from "./api";
+import { splitCutoffName, useBusinessNow } from "./clock";
+import { Badge, Button, CutoffChip, EscalationBadge, KindBadge, RuleKindChip, statusBadge, timeAgo, toneFor } from "./ui";
 
 interface Props {
   id: string;
@@ -14,6 +15,7 @@ interface Props {
 const channelIcon: Record<string, string> = { email: "✉", sms: "💬", phone: "📞", ui: "🖥" };
 
 export function AlertDrawer({ id, live, now, onClose, onAck, onResolve }: Props) {
+  const bizNow = useBusinessNow(10_000);
   const [detail, setDetail] = useState<{ alert: Alert; notifications: Notification[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -38,7 +40,7 @@ export function AlertDrawer({ id, live, now, onClose, onAck, onResolve }: Props)
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const a = live
+  const a: Alert | undefined = live
     ? { ...detail?.alert, ...live, sample: detail?.alert.sample, sampleRaw: detail?.alert.sampleRaw, sampleFormat: detail?.alert.sampleFormat }
     : detail?.alert;
 
@@ -55,6 +57,11 @@ export function AlertDrawer({ id, live, now, onClose, onAck, onResolve }: Props)
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge className={toneFor(a.color).badge}>{a.severity}</Badge>
                   <Badge className={statusBadge[a.status]}>{a.status}</Badge>
+                  <RuleKindChip kind={alertKind(a)} />
+                  {a.cutoffName && a.cutoffAt && (
+                    <CutoffChip name={a.cutoffName} at={a.cutoffAt} now={bizNow} resolved={a.status === "resolved"} />
+                  )}
+                  <EscalationBadge level={a.escalationLevel ?? 0} />
                   <span className="text-xs text-gray-500">rule {a.ruleId}</span>
                 </div>
                 <button onClick={onClose} className="rounded p-1 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200" aria-label="Close">
@@ -74,11 +81,29 @@ export function AlertDrawer({ id, live, now, onClose, onAck, onResolve }: Props)
             </header>
 
             <section className="grid grid-cols-2 gap-x-6 gap-y-3 border-b border-gray-200 p-5 text-sm dark:border-gray-800">
-              <Info label="Occurrences" value={a.count.toLocaleString()} />
+              <Info
+                label={alertKind(a) === "aggregate" ? "Peak events in window" : "Occurrences"}
+                value={a.count.toLocaleString()}
+              />
+              <Info label="Impact (0-100)" value={String(a.impact)} />
               <Info label="Team" value={a.team} />
               <Info label="First seen" value={`${new Date(a.firstSeen).toLocaleString()} (${timeAgo(a.firstSeen, now)})`} />
               <Info label="Last seen" value={`${new Date(a.lastSeen).toLocaleString()} (${timeAgo(a.lastSeen, now)})`} />
-              <Info label="Source" value={a.sourceId} />
+              <Info label="Source" value={a.sourceId === "kardan.absence" ? "kardan (expected event missing)" : a.sourceId} />
+              {a.cutoffName && a.cutoffAt && (
+                <Info
+                  label="Cut-off"
+                  value={`${splitCutoffName(a.cutoffName)[0]} · ${new Date(a.cutoffAt).toLocaleString([], {
+                    weekday: "short",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    timeZoneName: "short",
+                  })}`}
+                />
+              )}
+              {a.escalatedAt && (
+                <Info label="Escalated" value={`level ${a.escalationLevel}, ${timeAgo(a.escalatedAt, now)}`} />
+              )}
               {a.ackedBy && <Info label="Acknowledged by" value={a.ackedBy} />}
               {a.resolvedBy && <Info label="Resolved by" value={a.resolvedBy} />}
               {(a.fields ?? []).map((f) => (
@@ -123,7 +148,15 @@ export function AlertDrawer({ id, live, now, onClose, onAck, onResolve }: Props)
             )}
             {a.sample !== undefined && (
               <section className="p-5">
-                <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">{a.sampleRaw ? "Parsed payload" : "First event payload"}</h3>
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">
+                  {a.sourceId === "kardan.absence"
+                    ? "What was expected (no event arrived)"
+                    : alertKind(a) === "aggregate"
+                      ? "Event that crossed the threshold"
+                      : a.sampleRaw
+                        ? "Parsed payload"
+                        : "First event payload"}
+                </h3>
                 <pre className="mt-2 overflow-x-auto rounded-md bg-gray-50 p-3 font-mono text-xs text-gray-800 ring-1 ring-gray-200 dark:bg-gray-900 dark:text-gray-200 dark:ring-gray-800">
                   {JSON.stringify(a.sample, null, 2)}
                 </pre>

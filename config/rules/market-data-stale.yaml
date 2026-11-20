@@ -1,0 +1,24 @@
+# Absence (heartbeat): each instrument must tick at least every 30 seconds
+# while London trades. A silent feed means stale quotes; outside market
+# hours silence is expected, so nothing fires.
+id: market-data-stale
+name: Market data feed silent
+team: pricing
+kind: absence
+match:
+  all:
+    - { field: type, op: eq, value: PRICE_TICK }
+absence:
+  by: instrument
+  every: 30s
+  calendar: XLON
+routing:
+  - { to: team:pricing, channels: [email, ui] }
+presentation:
+  title: "No price tick for {{$key}} in {{$silentFor}}"
+  body: "Expected a tick at least every {{$expectedEvery}} during London hours. Last tick: {{$lastSeen}}. Quotes on {{$key}} may be stale: check the vendor feed or fail over."
+  severity: critical
+  fields:
+    - Instrument=$key
+    - Silent for=$silentFor
+    - Last tick=$lastSeen

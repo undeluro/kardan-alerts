@@ -21,11 +21,32 @@ type RuleSet struct {
 	Errors   []string    `json:"errors,omitempty"` // rules that failed validation are skipped, not fatal
 }
 
-// Match returns the enabled rules the event satisfies.
-func (rs *RuleSet) Match(d *schema.Doc) []*Compiled {
+// Match returns the enabled event rules the event satisfies.
+func (rs *RuleSet) Match(d *schema.Doc) []*Compiled { return rs.matchKind(d, KindEvent) }
+
+// Aggregates returns the enabled aggregate rules whose condition the event
+// satisfies (the event counts towards their windows).
+func (rs *RuleSet) Aggregates(d *schema.Doc) []*Compiled { return rs.matchKind(d, KindAggregate) }
+
+// Absences returns the enabled absence rules the event satisfies (the event
+// is the expected one, so it resets the timer).
+func (rs *RuleSet) Absences(d *schema.Doc) []*Compiled { return rs.matchKind(d, KindAbsence) }
+
+func (rs *RuleSet) matchKind(d *schema.Doc, kind string) []*Compiled {
 	var out []*Compiled
 	for _, c := range rs.Rules {
-		if c.Rule.IsEnabled() && c.Matches(d) {
+		if c.kind == kind && c.Rule.IsEnabled() && c.Matches(d) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// OfKind lists enabled rules of a kind.
+func (rs *RuleSet) OfKind(kind string) []*Compiled {
+	var out []*Compiled
+	for _, c := range rs.Rules {
+		if c.kind == kind && c.Rule.IsEnabled() {
 			out = append(out, c)
 		}
 	}
@@ -69,7 +90,8 @@ func (e *Engine) Current() *RuleSet { return e.cur.Load() }
 func (e *Engine) Swap(rs *RuleSet)  { e.cur.Store(rs) }
 
 // Build compiles rules into a RuleSet, collecting validation errors.
-func Build(list []Rule, defaultWindow time.Duration) *RuleSet {
+// check, if set, validates references (calendars...) after compilation.
+func Build(list []Rule, defaultWindow time.Duration, check ...func(*Compiled) error) *RuleSet {
 	rs := &RuleSet{LoadedAt: time.Now()}
 	seen := map[string]string{}
 	for _, r := range list {
@@ -78,6 +100,14 @@ func Build(list []Rule, defaultWindow time.Duration) *RuleSet {
 			continue
 		}
 		c, err := Compile(r, defaultWindow)
+		if err == nil {
+			for _, fn := range check {
+				if err = fn(c); err != nil {
+					err = fmt.Errorf("rule %s: %w", r.ID, err)
+					break
+				}
+			}
+		}
 		if err != nil {
 			rs.Errors = append(rs.Errors, fmt.Sprintf("%s (%s)", err, r.Origin))
 			continue

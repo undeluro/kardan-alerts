@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // Querier is satisfied by *pgxpool.Pool and pgx.Tx.
@@ -163,3 +164,55 @@ func ClaimHeld(ctx context.Context, tx pgx.Tx) ([]HeldGroup, error) {
 
 // IsNotFound reports ErrNotFound.
 func IsNotFound(err error) bool { return errors.Is(err, ErrNotFound) }
+
+// OpenWithCutoff lists unresolved alerts racing a cut-off (urgency refresh).
+func OpenWithCutoff(ctx context.Context, q Querier) ([]*Alert, error) {
+	rows, err := q.Query(ctx, `SELECT `+alertColumns+` FROM alerts
+		WHERE status <> 'resolved' AND cutoff_at IS NOT NULL ORDER BY cutoff_at LIMIT 2000`)
+	if err != nil {
+		return nil, err
+	}
+	return collectAlerts(rows)
+}
+
+// SetImpacts writes refreshed impact scores in one statement.
+func SetImpacts(ctx context.Context, q interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}, ids []string, impacts []int) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := q.Exec(ctx, `UPDATE alerts a SET impact = v.impact
+		FROM unnest($1::text[], $2::int[]) AS v(id, impact) WHERE a.id = v.id AND a.impact <> v.impact`, ids, impacts)
+	return err
+}
+
+// Unacknowledged lists a rule's open (not acknowledged) alerts below a given
+// escalation level, oldest first.
+func Unacknowledged(ctx context.Context, q Querier, ruleID string, belowLevel int) ([]*Alert, error) {
+	rows, err := q.Query(ctx, `SELECT `+alertColumns+` FROM alerts
+		WHERE status = 'open' AND rule_id = $1 AND escalation_level < $2
+		  AND created_at > now() - interval '1 day' ORDER BY created_at LIMIT 500`, ruleID, belowLevel)
+	if err != nil {
+		return nil, err
+	}
+	return collectAlerts(rows)
+}
+
+// MarkEscalated records that an escalation step was taken; it only succeeds
+// once per level, so concurrent sweepers cannot double-escalate.
+func MarkEscalated(ctx context.Context, tx pgx.Tx, id string, fromLevel int) (bool, error) {
+	tag, err := tx.Exec(ctx, `UPDATE alerts SET escalation_level = $2 + 1, escalated_at = now(), updated_at = now()
+		WHERE id = $1 AND status = 'open' AND escalation_level = $2`, id, fromLevel)
+	return tag.RowsAffected() == 1, err
+}
+
+// OpenByRule lists a rule's unresolved alerts.
+func OpenByRule(ctx context.Context, q Querier, ruleID string) ([]*Alert, error) {
+	rows, err := q.Query(ctx, `SELECT `+alertColumns+` FROM alerts
+		WHERE status <> 'resolved' AND rule_id = $1 ORDER BY created_at LIMIT 2000`, ruleID)
+	if err != nil {
+		return nil, err
+	}
+	return collectAlerts(rows)
+}

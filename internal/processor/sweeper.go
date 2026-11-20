@@ -49,6 +49,10 @@ func (p *Processor) sweep(ctx context.Context) {
 		{"digest windows", p.sweepWindows},
 		{"throttling digests", p.sweepHeld},
 		{"incidents", p.sweepIncidents},
+		{"absence", p.sweepAbsence},
+		{"aggregates", p.sweepAggregates},
+		{"cut-off urgency", p.sweepUrgency},
+		{"escalations", p.sweepEscalations},
 	} {
 		if err := step.fn(ctx); err != nil && ctx.Err() == nil {
 			p.Log.Warn("sweep step failed", "step", step.name, "err", err)
@@ -158,6 +162,9 @@ func (p *Processor) groupFromAlert(c *rules.Compiled, a *alerting.Alert) *group 
 	doc.FX = p.FX()
 	sig, overrides, _ := p.Schemas.Identify(a.Sample)
 	doc.Overrides = overrides
+	if vars := schema.DecodeVars(a.Vars); vars != nil {
+		doc = doc.WithVars(vars)
+	}
 	return &group{rule: c, fp: a.Fingerprint, first: doc, kinds: p.Schemas.Kinds(sig), recvAt: time.Now()}
 }
 

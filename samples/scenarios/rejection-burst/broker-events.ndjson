@@ -1,0 +1,6 @@
+{"meta":{"schema":"trade.rejected.v2","producer":"trade-gateway"},"payload":{"tradeId":"T-770001","desk":"fx","counterparty":"NORTHWIND-BANK","notional":20000000,"currency":"USD","reason":"CREDIT_LIMIT_EXCEEDED"}}
+{"meta":{"schema":"trade.rejected.v2","producer":"trade-gateway"},"payload":{"tradeId":"T-770002","desk":"fx","counterparty":"NORTHWIND-BANK","notional":15000000,"currency":"USD","reason":"CREDIT_LIMIT_EXCEEDED"}}
+{"meta":{"schema":"trade.rejected.v2","producer":"trade-gateway"},"payload":{"tradeId":"T-770003","desk":"credit","counterparty":"NORTHWIND-BANK","notional":18000000,"currency":"USD","reason":"SSI_MISSING"}}
+{"meta":{"schema":"trade.rejected.v2","producer":"trade-gateway"},"payload":{"tradeId":"T-770004","desk":"fx","counterparty":"NORTHWIND-BANK","notional":4000000,"currency":"EUR","reason":"CREDIT_LIMIT_EXCEEDED"}}
+{"meta":{"schema":"trade.rejected.v2","producer":"trade-gateway"},"payload":{"tradeId":"T-770005","desk":"fx","counterparty":"NORTHWIND-BANK","notional":6000000,"currency":"EUR","reason":"CREDIT_LIMIT_EXCEEDED"}}
+{"meta":{"schema":"trade.rejected.v2","producer":"trade-gateway"},"payload":{"tradeId":"T-770006","desk":"credit","counterparty":"NORTHWIND-BANK","notional":3000000,"currency":"GBP","reason":"SSI_MISSING"}}

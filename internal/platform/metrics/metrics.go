@@ -78,6 +78,11 @@ var (
 		Help: "Notifications held by per-recipient throttling, by channel.",
 	}, []string{"channel"})
 
+	Escalations = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "kardan_escalations_total",
+		Help: "Escalation steps taken for unacknowledged alerts, by team.",
+	}, []string{"team"})
+
 	DigestsSent = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "kardan_digests_total",
 		Help: "Digest notifications created, by kind (window, throttle).",

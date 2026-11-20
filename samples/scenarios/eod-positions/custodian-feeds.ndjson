@@ -1,0 +1,2 @@
+{"type":"EOD_POSITIONS","custodian":"BNYM","businessDate":"2026-11-20","file":"BNYM_EOD_POS_20261120.csv","positions":18432,"marketValueUsd":4120000000}
+{"type":"EOD_POSITIONS","custodian":"STATESTREET","businessDate":"2026-11-20","file":"SST_POSITIONS_20261120.xml","positions":9210,"marketValueUsd":2385000000}

@@ -11,10 +11,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/undeluro/kardan-alerts/internal/calendar"
 	"github.com/undeluro/kardan-alerts/internal/event"
 	"github.com/undeluro/kardan-alerts/internal/finance"
 	"github.com/undeluro/kardan-alerts/internal/rules"
 	"github.com/undeluro/kardan-alerts/internal/schema"
+	"github.com/undeluro/kardan-alerts/internal/tmpl"
 )
 
 // actor names who made a change (the UI sends its "acting as" name).
@@ -58,10 +60,21 @@ func decodeRule(r *http.Request) (rules.Rule, error) {
 // validateRule compiles the rule and checks it against the directory, so a
 // typo in a team or person is caught before the rule silently notifies nobody.
 func (s *Server) validateRule(rule rules.Rule) error {
-	if _, err := rules.Compile(rule, s.DefaultWindow); err != nil {
+	c, err := rules.Compile(rule, s.DefaultWindow)
+	if err != nil {
 		return err
 	}
+	if s.CheckRule != nil {
+		if err := s.CheckRule(c); err != nil {
+			return err
+		}
+	}
 	dir := s.Directory()
+	for i, e := range rule.Escalation {
+		if !dir.Exists(e.To) {
+			return fmt.Errorf("escalation[%d].to %q matches no known team or person", i, e.To)
+		}
+	}
 	if _, ok := dir.Team(rule.Team); !ok {
 		return fmt.Errorf("unknown team %q", rule.Team)
 	}
@@ -226,6 +239,9 @@ func (s *Server) testRule(w http.ResponseWriter, r *http.Request) {
 		rule.ID = "draft"
 	}
 	c, err := rules.Compile(rule, s.DefaultWindow)
+	if err == nil && s.CheckRule != nil {
+		err = s.CheckRule(c)
+	}
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"valid": false, "error": err.Error()})
 		return
@@ -276,7 +292,70 @@ func (s *Server) testRule(w http.ResponseWriter, r *http.Request) {
 		ws, we := c.WindowFor(env.ReceivedAt)
 		resp["window"] = map[string]time.Time{"start": ws, "end": we}
 	}
+	s.explainTime(resp, c, doc, rendered.Severity, usd.Num, usd.Exists())
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// explainTime adds what the time-aware settings would do with this event right
+// now (business clock): rule kind, market hours, cut-off and urgency.
+func (s *Server) explainTime(resp map[string]any, c *rules.Compiled, doc *schema.Doc, sev string, usd float64, hasUSD bool) {
+	resp["kind"] = c.Kind()
+	now := time.Now()
+	if s.Clock != nil {
+		now = s.Clock.Now()
+	}
+	var cals *calendar.Set
+	if s.Calendars != nil {
+		cals = s.Calendars()
+	}
+	switch c.Kind() {
+	case rules.KindAggregate:
+		spec := c.Aggregate()
+		values, _ := c.AggregateKey(doc)
+		measure := "events"
+		if spec.SumField != "" {
+			measure = "sum of " + spec.SumField
+		}
+		resp["timeNote"] = fmt.Sprintf("Counts towards the window for %q: fires when the %s in %s reaches %s.",
+			strings.Join(values, " / "), measure, rules.HumanWindow(spec.Window), tmpl.FormatNumber(spec.Threshold))
+	case rules.KindAbsence:
+		spec := c.Absence()
+		key := c.AbsenceKey(doc)
+		if spec.Deadline >= 0 {
+			resp["timeNote"] = fmt.Sprintf("This is the expected event%s: it satisfies today's %02d:%02d deadline (%s).",
+				forSender(key), spec.Deadline/60, spec.Deadline%60, spec.Calendar)
+		} else {
+			resp["timeNote"] = fmt.Sprintf("This is the expected heartbeat%s: it resets the %s timer.", forSender(key), rules.HumanWindow(spec.Every))
+		}
+	}
+	if id, off := c.During(); id != "" {
+		if cal, ok := cals.Get(id); ok {
+			open := cal.IsOpen(now)
+			resp["during"] = map[string]any{"calendar": id, "open": open, "otherwise": off}
+		}
+	}
+	if mode := c.CutoffMode(); mode != "" {
+		var d calendar.Deadline
+		var ok bool
+		if mode == "auto" {
+			d, ok = cals.NextCutoff(doc.Get("$currency").String(), now)
+		} else {
+			d, ok = cals.Named(mode, now)
+		}
+		if ok {
+			u := finance.Urgency(d.At, now)
+			resp["cutoff"] = map[string]any{"name": d.Name + " (" + d.Calendar + ")", "at": d.At,
+				"minutesLeft": int(d.At.Sub(now).Minutes()), "urgency": u}
+			resp["impact"] = min(100, finance.Impact(sev, usd, hasUSD)+u)
+		}
+	}
+}
+
+func forSender(key string) string {
+	if key == "" {
+		return ""
+	}
+	return " from " + key
 }
 
 func envelopeFromRaw(s *Server, source string, raw []byte) *event.Envelope {

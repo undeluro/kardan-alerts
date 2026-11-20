@@ -3,6 +3,8 @@ import { api, type ClockState, type SchemaNotice, type Team } from "./api";
 import { AlertsPage } from "./pages/AlertsPage";
 import { DeliveriesPage } from "./pages/DeliveriesPage";
 import { TeamsPage } from "./pages/TeamsPage";
+import { MarketsPage } from "./pages/MarketsPage";
+import { setBusinessClock } from "./clock";
 import { RuleEditor } from "./pages/RuleEditor";
 import { RulesPage } from "./pages/RulesPage";
 import { SchemaDetail } from "./pages/SchemaDetail";
@@ -34,6 +36,7 @@ const NAV = [
   { to: "/rules", label: "Rules", match: (p: string) => p.startsWith("/rules") },
   { to: "/schemas", label: "Schemas", match: (p: string) => p.startsWith("/schemas") },
   { to: "/sources", label: "Sources", match: (p: string) => p.startsWith("/sources") },
+  { to: "/markets", label: "Markets", match: (p: string) => p.startsWith("/markets") },
   { to: "/deliveries", label: "Deliveries", match: (p: string) => p.startsWith("/deliveries") },
   { to: "/teams", label: "Teams", match: (p: string) => p.startsWith("/teams") },
 ];
@@ -59,7 +62,13 @@ export default function App() {
   const [schemaNotices, setSchemaNotices] = useState<SchemaNotice[]>([]);
   const [clock, setClock] = useState<ClockState | null>(null);
   const loadClock = useCallback(() => {
-    api.clock().then(setClock).catch(() => {});
+    api
+      .clock()
+      .then((c) => {
+        setClock(c);
+        setBusinessClock(c.now);
+      })
+      .catch(() => {});
   }, []);
   useEffect(() => {
     loadClock();
@@ -105,6 +114,7 @@ export default function App() {
   else if (path === "/sources") page = <SourcesPage now={now} />;
   else if (path === "/deliveries") page = <DeliveriesPage now={now} onToast={showToast} />;
   else if (path === "/teams") page = <TeamsPage onClockChange={loadClock} />;
+  else if (path === "/markets") page = <MarketsPage />;
   else if (path !== "/" && !alertId)
     page = (
       <div className="py-16 text-center">

@@ -131,7 +131,7 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		defer cons.Close()
 		p := &processor.Processor{
 			Kafka: cons, Pool: pool, Engine: engine, Directory: reloader.Directory, Privacy: reloader.Privacy,
-			FX: reloader.FX, Correlation: reloader.Correlation,
+			FX: reloader.FX, Correlation: reloader.Correlation, Calendars: reloader.Calendars, Redis: rdb,
 			Throttler: &notify.Throttler{Redis: rdb, Config: func() directory.Throttle { return reloader.Directory().Throttling() }},
 			Clock:     biz, Fallbacks: cfg.Fallbacks,
 			Renderer: notify.Renderer{PublicURL: cfg.PublicURL}, Publisher: publisher, Schemas: schemas,
@@ -177,6 +177,7 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 			Store: store, Publisher: publisher, Engine: engine, RuleStore: ruleStore, Schemas: schemas,
 			Directory: reloader.Directory, ConfigErrors: reloader.Errors, DefaultWindow: cfg.DedupWindow,
 			Clock: biz, GatewayToken: cfg.GatewayToken, FX: reloader.FX, Correlation: reloader.Correlation,
+			Calendars: reloader.Calendars, CheckRule: reloader.checkCalendars,
 			ChannelStates: func(r *http.Request) map[string]string { return channelStates(r.Context(), rdb) },
 			Notify:        func(ctx context.Context, kind string) error { return bus.NotifyConfig(ctx, rdb, kind) },
 			ParseRaw: func(source string, raw []byte) *event.Envelope {

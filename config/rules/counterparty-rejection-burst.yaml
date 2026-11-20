@@ -1,0 +1,27 @@
+# Aggregate (count): five or more trade rejections for the same counterparty
+# within 10 minutes. One rejection is routine; a burst usually means the
+# counterparty's link, limits or static data are broken.
+id: counterparty-rejection-burst
+name: Rejection burst for one counterparty
+team: counterparty-support
+kind: aggregate
+match:
+  all:
+    - { field: meta.schema,   op: glob,   value: "trade.rejected.*" }
+    - { field: $counterparty, op: exists, value: true }
+aggregate:
+  by: [$counterparty]
+  window: 10m
+  threshold: 5
+routing:
+  - { to: team:counterparty-support, channels: [email, ui] }
+presentation:
+  title: "{{$key}}: {{$count}} trade rejections in {{$window}}"
+  body: "Latest: {{payload.tradeId}} on the {{payload.desk}} desk, {{payload.currency}} {{payload.notional | number}} — {{payload.reason}}."
+  severity: error
+  fields:
+    - Counterparty=$counterparty
+    - Rejections in window=$count
+    - Latest trade=payload.tradeId
+    - Latest reason=payload.reason
+cutoff: auto

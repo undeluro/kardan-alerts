@@ -4,10 +4,11 @@
 prefer, without flooding them, for trading, settlement and payments operations. It accepts events of *any* shape
 from any source, and teams decide what reaches them with rules they edit as data, not code.
 
-> Hackathon 2026 — *Flexible Alerting & Notification Service*. Status: **Milestones 1–5 done** (end-to-end
+> Hackathon 2026 — *Flexible Alerting & Notification Service*. Status: **Milestones 1–6 done** (end-to-end
 > slice; Kafka, log-file, FIX and ISO 20022 sources; schema registry with finance field detection; live rule
 > editing; reliable delivery with on-call, preferences, masking, circuit breakers and fallbacks; money-at-risk
-> ranking, incident correlation, grouping windows, throttling and auto-resolve). See [Roadmap](#roadmap) for what is next.
+> ranking, incident correlation, grouping windows, throttling and auto-resolve; window totals, missing-event
+> detection, market calendars, cut-off countdowns and escalation ladders). See [Roadmap](#roadmap) for what is next.
 
 ## Quick start
 
@@ -25,6 +26,18 @@ and tailed log files (regex-parsed pricing logs, a FIX engine log). Then play th
 ./samples/scenario.sh counterparty-outage   # settlement, trade and FIX events for one counterparty -> one incident
 ./samples/scenario.sh pricing-burst         # many pricing warnings -> one alert per instrument per 5-minute window
 ./samples/scenario.sh recovery              # Alertmanager "resolved" -> alert closes, "all clear" to whoever was paged
+PACE=1 ./samples/scenario.sh rejection-burst  # one per second: USD 50M rejected fires on the 3rd, "5 rejections" on the 5th
+```
+
+Time-aware rules (business clock in demo mode, so you can jump past a deadline):
+
+```sh
+./samples/scenario.sh eod-positions          # 2 of 3 custodians deliver their end-of-day positions file
+curl -X PUT localhost:8080/api/clock -d '{"at":"2026-11-20T23:31:00Z"}'   # 18:31 New York: JPM-CUSTODY missing
+./samples/scenario.sh eod-late-file          # the late file arrives -> alert resolves, "all clear" sent
+curl -X PUT localhost:8080/api/clock -d '{"at":"2026-11-26T23:31:00Z"}'   # Thanksgiving: NYSE holiday, nothing fires
+./samples/scenario.sh market-data            # price ticks; stop sending during London hours -> "no tick for 30 s"
+curl -X PUT localhost:8080/api/clock -d '{"offsetMinutes":0}'             # back to real time
 ```
 
 | What                     | Where                                                         |
@@ -34,6 +47,7 @@ and tailed log files (regex-parsed pricing logs, a FIX engine log). Then play th
 | Every email sent         | http://localhost:8025 (Mailpit)                               |
 | SMS and calls            | http://localhost:8090 (phone simulator: reply, answer, inject provider failures) |
 | Deliveries, on-call      | http://localhost:8080/deliveries · /teams                     |
+| Markets and cut-offs     | http://localhost:8080/markets                                 |
 | Prometheus metrics       | http://localhost:8080/metrics                                 |
 
 Scale the workers horizontally: `docker compose up -d --scale worker=3`.
@@ -122,6 +136,28 @@ Scale the workers horizontally: `docker compose up -d --scale worker=3`.
   - `autoResolve` closes alerts when the source reports recovery (Alertmanager `status: resolved`) or after a
     quiet period, and sends "all clear" to whoever was paged.
   - All of this is driven by a sweeper that is safe to run on every replica.
+- **Totals over time, not just single events** (`kind: aggregate`).
+  - A sliding window per key, counted or summed: "5 rejections for one counterparty in 10 minutes", "more than
+    USD 50M of rejected notional per counterparty in an hour" (amounts converted to USD before summing).
+  - Windows live in Redis sorted sets keyed by event id, so a replayed batch never double counts.
+  - The alert opens when the total crosses the threshold, keeps the running total in its title and resolves
+    itself, with an all-clear, when the total falls back below.
+- **Silence is an alert too** (`kind: absence`).
+  - Deadline: "each custodian's EOD positions file by 18:30 New York on every NYSE business day". Weekends and
+    holidays expect nothing; the alert names the missing sender and resolves when the late file arrives.
+  - Heartbeat: "a tick for every instrument at least every 30 s while London trades". Outside market hours
+    silence is expected.
+- **Market calendars and cut-offs** (`config/calendars.yaml`, hot-reloaded; illustrative T2, Fedwire, CHAPS, CLS,
+  London and NYSE schedules with 2026 holidays).
+  - `during: {calendar: XLON, otherwise: info}`: quote latency is critical while London trades, and only
+    information (UI only, nobody paged) at night.
+  - `cutoff: auto` ties an alert to the next cut-off for its currency. The alert shows "⏱ 44 min to Fedwire customer
+    transfers", and up to 20 impact points are added over the last two hours, so the feed reorders itself as
+    deadlines approach.
+  - `escalation:` ladders notify the next level when nobody acknowledges in time. Within an hour of the cut-off the
+    delays shrink with the time left, down to 20%: a 10-minute step fires after 2 minutes when the cut-off is
+    minutes away.
+  - Rules that name an unknown calendar or cut-off are rejected when saved.
 - **Live UI.** A server-sent-events feed per team (push, no refresh), ack/resolve, and a detail drawer with each
   delivery's channel, recipient, reason, fallbacks and the raw payload. The Deliveries page shows channel health
   and breaker state, the Teams page shows on-call now. In demo mode a shared business clock lets you jump to
@@ -175,6 +211,24 @@ dedup: { key: "{{payload.tradeId}}" }
 # optional:
 # group:       { by: [instrument], window: 5m }      # one alert per instrument per window, digest at close
 # autoResolve: { when: { field: status, op: eq, value: resolved }, after: 2h }
+# during:      { calendar: XLON, otherwise: info }   # outside London hours: downgrade, UI only (or "suppress")
+# cutoff:      auto                                  # race the currency's payment cut-off (or a cut-off name)
+# escalation:  [{ after: 15m, to: oncall:rates, channels: [phone] }]
+```
+
+Time-aware rule kinds (`kind: event` is the default):
+
+```yaml
+kind: aggregate                    # fires when a window total crosses a threshold
+aggregate: { by: [$counterparty], window: 1h, sum: $notionalUsd, threshold: 50000000 }   # omit sum to count
+presentation:
+  title: "{{$key}}: USD {{$sum | number}} rejected in {{$window}} ({{$count}} trades)"
+---
+kind: absence                      # fires when the expected event does not arrive
+absence: { by: custodian, expect: [BNYM, STATESTREET], deadline: "18:30", calendar: XNYS }
+# or a heartbeat:  absence: { by: instrument, every: 30s, calendar: XLON }
+presentation:
+  title: "EOD positions from {{$key}} not received by {{$deadline}}"   # also $lastSeen, $silentFor, $reason
 ```
 
 Create or change rules without touching files (YAML or JSON bodies), or dry-run one first:
@@ -184,7 +238,8 @@ curl -s localhost:8080/api/rules -H 'Content-Type: application/yaml' --data-bina
 curl -s localhost:8080/api/rules/test -d '{"ruleYaml": "...", "raw": "<any event text: JSON, XML, FIX, log line>"}'
 ```
 
-Template filters: `number`, `upper`, `lower`, `default "x"`, `truncate N`, `json`.
+Template filters: `number`, `upper`, `lower`, `default "x"`, `truncate N`, `json`. They also work in presentation
+fields: `Rejected USD=$sum | number`.
 
 ## API
 
@@ -195,6 +250,7 @@ Template filters: `number`, `upper`, `lower`, `default "x"`, `truncate N`, `json
 | GET | `/api/alerts?team=&status=active\|resolved&sort=impact\|money\|recent&incident=` | list |
 | GET | `/api/incidents?status=open` · `/api/incidents/{id}` | correlated incidents with totals · incident + alerts |
 | GET | `/api/fx` | FX rates used for money at risk |
+| GET | `/api/calendars` | calendars at business time: open/closed, holidays, next cut-offs |
 | GET | `/api/alerts/{id}` | alert + deliveries |
 | POST | `/api/alerts/{id}/ack` · `/resolve` | body `{"by": "name"}` |
 | GET | `/api/stream?team=` | server-sent events |
@@ -229,6 +285,7 @@ Configuration is through environment variables with working defaults; see `inter
 | SMTP provider | Mailpit (real SMTP, captured) |
 | SMS / voice provider | `cmd/fakegw`: same contract as a real provider (HTTP API, idempotency keys, inbound reply webhooks), with a phone simulator and failure injection. A real provider is one more `notify.Channel` |
 | Kafka | Redpanda (Kafka API compatible, single node) |
+| Market calendars | `config/calendars.yaml` with illustrative hours, cut-offs and 2026 holidays; a real deployment would load them from a reference-data service |
 | Authentication / SSO | None yet: actions record a free-text "acting as" name (entitlements: M7) |
 
 ## Roadmap
@@ -240,7 +297,7 @@ Configuration is through environment variables with working defaults; see `inter
 4. ~~Fake SMS/phone gateway; preferences with working hours and follow-the-sun on-call; masking per channel;
    circuit breakers~~ ✔
 5. ~~Grouping digests, throttling, auto-resolve, FX-normalised dollar impact, incident correlation~~ ✔
-6. `aggregate` and `absence` rules, market calendars and cut-off countdowns
+6. ~~`aggregate` and `absence` rules, market calendars, cut-off countdowns and escalation ladders~~ ✔
 7. Runbooks (YAML / Markdown / free text) with actions, four-eyes approvals and a hash-chained audit trail
 8. Rule builder with dry-run on recent events, onboarding wizard
 9. AI-assisted runbook structuring and rule drafting (opt-in)

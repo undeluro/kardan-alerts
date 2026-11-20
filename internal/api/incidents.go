@@ -3,8 +3,10 @@ package api
 import (
 	"errors"
 	"net/http"
+	"time"
 
 	"github.com/undeluro/kardan-alerts/internal/alerting"
+	"github.com/undeluro/kardan-alerts/internal/calendar"
 )
 
 func (s *Server) minAlerts() int {
@@ -53,4 +55,26 @@ func (s *Server) getFX(w http.ResponseWriter, _ *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.FX())
+}
+
+// getCalendars shows market and payment-system calendars at business time:
+// open or closed, holiday, and the next cut-offs with time left.
+func (s *Server) getCalendars(w http.ResponseWriter, _ *http.Request) {
+	now := time.Now()
+	if s.Clock != nil {
+		now = s.Clock.Now()
+	}
+	var set *calendar.Set
+	if s.Calendars != nil {
+		set = s.Calendars()
+	}
+	note := ""
+	if set != nil {
+		note = set.Note
+	}
+	st := set.Status(now)
+	if st == nil {
+		st = []calendar.Status{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"now": now, "note": note, "calendars": st})
 }

@@ -1,0 +1,31 @@
+# Aggregate (sum): more than USD 50M of rejected notional for one
+# counterparty within an hour, whatever the number of trades. Notionals are
+# converted to USD with config/fx.yaml before they are summed.
+id: counterparty-rejected-notional
+name: Rejected notional per counterparty over USD 50M
+team: rates
+kind: aggregate
+match:
+  all:
+    - { field: meta.schema,   op: glob,   value: "trade.rejected.*" }
+    - { field: $counterparty, op: exists, value: true }
+aggregate:
+  by: [$counterparty]
+  window: 1h
+  sum: $notionalUsd
+  threshold: 50000000
+routing:
+  - { to: team:rates, channels: [email, ui] }
+presentation:
+  title: "{{$key}}: USD {{$sum | number}} rejected in {{$window}} ({{$count}} trades)"
+  body: "Above the USD {{$threshold | number}} limit. Latest: {{payload.tradeId}} {{payload.currency}} {{payload.notional | number}} — {{payload.reason}}."
+  severity: critical
+  fields:
+    - Counterparty=$counterparty
+    - Rejected USD in window=$sum | number
+    - Trades in window=$count
+    - Latest trade=payload.tradeId
+cutoff: auto
+escalation:
+  - { after: 15m, to: team:rates,                 channels: [sms] }
+  - { after: 30m, to: team:counterparty-support,  channels: [phone] }

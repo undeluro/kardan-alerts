@@ -19,6 +19,16 @@ type Rule struct {
 	AutoResolve  *AutoResolve `yaml:"autoResolve,omitempty" json:"autoResolve,omitempty"`
 	Runbooks     []string     `yaml:"runbooks,omitempty" json:"runbooks,omitempty"`
 
+	// Kind selects how the rule fires: "event" (default: each matching
+	// event), "aggregate" (a total over a sliding window crosses a
+	// threshold) or "absence" (an expected event does not arrive).
+	Kind       string           `yaml:"kind,omitempty" json:"kind,omitempty"`
+	Aggregate  *Aggregate       `yaml:"aggregate,omitempty" json:"aggregate,omitempty"`
+	Absence    *Absence         `yaml:"absence,omitempty" json:"absence,omitempty"`
+	During     *During          `yaml:"during,omitempty" json:"during,omitempty"`
+	Cutoff     string           `yaml:"cutoff,omitempty" json:"cutoff,omitempty"` // "auto" ($currency) or a cut-off name
+	Escalation []EscalationStep `yaml:"escalation,omitempty" json:"escalation,omitempty"`
+
 	// Origin records where the rule came from ("file:<name>" or "api").
 	Origin string `yaml:"-" json:"origin,omitempty"`
 	// Overrides is set when an API rule replaces a file rule with the same id.
@@ -70,6 +80,50 @@ func normalizeValue(v any) any {
 		}
 	}
 	return v
+}
+
+// Aggregate fires when the count (or the sum of a field) of matching events
+// per key over a sliding window reaches a threshold:
+//
+//	aggregate: { by: [$counterparty], window: 1h, sum: $notionalUsd, threshold: 50000000 }
+//	aggregate: { by: [$counterparty], window: 10m, threshold: 5 }   # 5 events
+type Aggregate struct {
+	By        []string `yaml:"by,omitempty" json:"by,omitempty"`
+	Window    string   `yaml:"window" json:"window"`
+	Sum       string   `yaml:"sum,omitempty" json:"sum,omitempty"`
+	Threshold float64  `yaml:"threshold" json:"threshold"`
+}
+
+// Absence fires when an expected event does not arrive:
+//
+//	deadline mode:  every business day of `calendar`, by `deadline` local time
+//	heartbeat mode: at least once `every` (optionally only while `calendar` is open)
+//
+// `by` names the field identifying the sender (custodian, instrument...);
+// `expect` lists senders that must report even if never seen.
+type Absence struct {
+	By       string   `yaml:"by,omitempty" json:"by,omitempty"`
+	Expect   []string `yaml:"expect,omitempty" json:"expect,omitempty"`
+	Deadline string   `yaml:"deadline,omitempty" json:"deadline,omitempty"` // "18:30"
+	Every    string   `yaml:"every,omitempty" json:"every,omitempty"`       // "30s"
+	Calendar string   `yaml:"calendar,omitempty" json:"calendar,omitempty"`
+}
+
+// During limits a rule to a calendar's opening hours. Outside them the alert
+// is suppressed or downgraded (to UI only) — e.g. pricing latency matters
+// while the desk trades, not at 3 am.
+type During struct {
+	Calendar  string `yaml:"calendar" json:"calendar"`
+	Otherwise string `yaml:"otherwise" json:"otherwise"` // suppress | info | warning | ...
+}
+
+// EscalationStep notifies the next level if the alert is still not
+// acknowledged `after` its creation. Delays shrink as the alert's cut-off
+// approaches.
+type EscalationStep struct {
+	After    string   `yaml:"after" json:"after"`
+	To       string   `yaml:"to" json:"to"`
+	Channels []string `yaml:"channels" json:"channels"`
 }
 
 // Route sends alerts to a target on channels.

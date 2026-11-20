@@ -1,5 +1,6 @@
-import type { Alert, Incident } from "./api";
-import { Badge, Button, formatCount, formatUSD, statusBadge, timeAgo, toneFor } from "./ui";
+import { alertKind, type Alert, type Incident } from "./api";
+import { useBusinessNow } from "./clock";
+import { Badge, Button, CutoffChip, EscalationBadge, formatCount, formatUSD, RuleKindChip, statusBadge, timeAgo, toneFor } from "./ui";
 
 interface Props {
   alert: Alert;
@@ -19,6 +20,7 @@ export function AlertCard({ alert: a, incident, onIncident, flash, now, busy, on
   const windowLabel = a.windowStart && a.windowEnd ? `${hhmm(a.windowStart)}–${hhmm(a.windowEnd)} window` : null;
   const t = toneFor(a.color);
   const resolved = a.status === "resolved";
+  const bizNow = useBusinessNow(15_000);
   return (
     <li
       onClick={onOpen}
@@ -32,6 +34,7 @@ export function AlertCard({ alert: a, incident, onIncident, flash, now, busy, on
           <div className="flex flex-wrap items-center gap-2">
             <Badge className={t.badge}>{a.severity}</Badge>
             <Badge className={statusBadge[a.status]}>{a.status}</Badge>
+            <RuleKindChip kind={alertKind(a)} />
             {a.count > 1 && (
               <Badge className="bg-gray-900 text-white ring-gray-900 dark:bg-white dark:text-gray-900 dark:ring-white">
                 ×{formatCount(a.count)}
@@ -42,6 +45,8 @@ export function AlertCard({ alert: a, incident, onIncident, flash, now, busy, on
                 {formatUSD(a.notionalUsd)} at risk
               </Badge>
             )}
+            {a.cutoffName && a.cutoffAt && <CutoffChip name={a.cutoffName} at={a.cutoffAt} now={bizNow} resolved={resolved} />}
+            <EscalationBadge level={a.escalationLevel} />
             {windowLabel && (
               <Badge className="bg-sky-50 text-sky-700 ring-sky-600/20 dark:bg-sky-500/10 dark:text-sky-300 dark:ring-sky-400/30">
                 {windowLabel}

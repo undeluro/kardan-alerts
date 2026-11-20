@@ -22,7 +22,8 @@ var ErrNotFound = errors.New("not found")
 const alertColumns = `id, fingerprint, rule_id, team, status, severity, color, title, body, fields,
 	source_id, first_event_id, last_event_id, sample, sample_raw, sample_format, count, first_seen, last_seen,
 	acked_by, acked_at, resolved_by, resolved_at, created_at, updated_at,
-	notional_usd, impact, incident_id, window_start, window_end`
+	notional_usd, impact, incident_id, window_start, window_end,
+	cutoff_name, cutoff_at, base_impact, escalation_level, escalated_at, vars`
 
 func scanAlert(row pgx.Row) (*Alert, error) {
 	var a Alert
@@ -31,7 +32,8 @@ func scanAlert(row pgx.Row) (*Alert, error) {
 		&a.Body, &fields, &a.SourceID, &a.FirstEventID, &a.LastEventID, &a.Sample, &a.SampleRaw, &a.SampleFormat,
 		&a.Count, &a.FirstSeen,
 		&a.LastSeen, &a.AckedBy, &a.AckedAt, &a.ResolvedBy, &a.ResolvedAt, &a.CreatedAt, &a.UpdatedAt,
-		&a.NotionalUSD, &a.Impact, &a.IncidentID, &a.WindowStart, &a.WindowEnd)
+		&a.NotionalUSD, &a.Impact, &a.IncidentID, &a.WindowStart, &a.WindowEnd,
+		&a.CutoffName, &a.CutoffAt, &a.BaseImpact, &a.Escalation, &a.EscalatedAt, &a.Vars)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -49,6 +51,9 @@ func scanAlert(row pgx.Row) (*Alert, error) {
 // UpsertInput is one fingerprint's worth of matching events from a batch.
 type UpsertInput struct {
 	Alert Alert // ID is the id to use if a new row is inserted
+	// Refresh (aggregate rules): Count is the current window total, so keep
+	// the peak instead of adding, and refresh title/body/vars to the latest.
+	Refresh bool
 }
 
 // UpsertResult says whether a new alert was opened or an open one absorbed
@@ -78,19 +83,27 @@ func Upsert(ctx context.Context, tx pgx.Tx, in []UpsertInput) ([]UpsertResult, e
 		b.Queue(`
 			INSERT INTO alerts (id, fingerprint, rule_id, team, severity, color, title, body, fields,
 			                    source_id, first_event_id, last_event_id, sample, count, first_seen, last_seen,
-			                    sample_raw, sample_format, notional_usd, impact, window_start, window_end)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+			                    sample_raw, sample_format, notional_usd, impact, window_start, window_end,
+			                    cutoff_name, cutoff_at, base_impact, vars)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22,
+			        $23, $24, $25, $26)
 			ON CONFLICT (fingerprint) WHERE status <> 'resolved' DO UPDATE SET
-			    count         = alerts.count + EXCLUDED.count,
+			    count         = CASE WHEN $27 THEN GREATEST(alerts.count, EXCLUDED.count) ELSE alerts.count + EXCLUDED.count END,
+			    title         = CASE WHEN $27 THEN EXCLUDED.title ELSE alerts.title END,
+			    body          = CASE WHEN $27 THEN EXCLUDED.body ELSE alerts.body END,
+			    fields        = CASE WHEN $27 THEN EXCLUDED.fields ELSE alerts.fields END,
+			    vars          = CASE WHEN $27 THEN EXCLUDED.vars ELSE alerts.vars END,
 			    last_seen     = GREATEST(alerts.last_seen, EXCLUDED.last_seen),
 			    last_event_id = EXCLUDED.last_event_id,
 			    notional_usd  = GREATEST(alerts.notional_usd, EXCLUDED.notional_usd),
 			    impact        = GREATEST(alerts.impact, EXCLUDED.impact),
+			    base_impact   = GREATEST(alerts.base_impact, EXCLUDED.base_impact),
 			    updated_at    = now()
 			RETURNING id, count, last_seen, (xmax = 0) AS inserted`,
 			a.ID, a.Fingerprint, a.RuleID, a.Team, a.Severity, a.Color, a.Title, a.Body, fields,
 			a.SourceID, a.FirstEventID, a.LastEventID, a.Sample, a.Count, a.FirstSeen, a.LastSeen,
-			a.SampleRaw, a.SampleFormat, a.NotionalUSD, a.Impact, a.WindowStart, a.WindowEnd)
+			a.SampleRaw, a.SampleFormat, a.NotionalUSD, a.Impact, a.WindowStart, a.WindowEnd,
+			a.CutoffName, a.CutoffAt, a.BaseImpact, nullJSON(a.Vars), u.Refresh)
 	}
 	br := tx.SendBatch(ctx, b)
 	defer br.Close()
@@ -295,4 +308,12 @@ func (s *Store) Stats(ctx context.Context, team string) (Stats, error) {
 		FROM notifications n JOIN alerts a ON a.id = n.alert_id
 		WHERE ($1 = '' OR a.team = $1)`, team).Scan(&st.PendingDeliveries, &st.FailedDeliveries)
 	return st, err
+}
+
+// nullJSON stores an empty document as SQL NULL.
+func nullJSON(raw json.RawMessage) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	return string(raw)
 }

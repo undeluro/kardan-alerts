@@ -15,6 +15,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"github.com/undeluro/kardan-alerts/internal/calendar"
 	"github.com/undeluro/kardan-alerts/internal/directory"
 	"github.com/undeluro/kardan-alerts/internal/finance"
 	"github.com/undeluro/kardan-alerts/internal/ingest"
@@ -44,6 +45,7 @@ type Reloader struct {
 	privacy atomic.Pointer[privacy.Policy]
 	fx      atomic.Pointer[finance.FX]
 	corr    atomic.Pointer[finance.Correlation]
+	cals    atomic.Pointer[calendar.Set]
 
 	mu        sync.Mutex
 	fileRules []rules.Rule
@@ -57,6 +59,7 @@ func (r *Reloader) Directory() *directory.Directory   { return r.dir.Load() }
 func (r *Reloader) Privacy() *privacy.Policy          { return r.privacy.Load() }
 func (r *Reloader) FX() *finance.FX                   { return r.fx.Load() }
 func (r *Reloader) Correlation() *finance.Correlation { return r.corr.Load() }
+func (r *Reloader) Calendars() *calendar.Set          { return r.cals.Load() }
 
 // loadMoney (re)loads FX rates and correlation settings, keeping the last
 // good version on error.
@@ -76,6 +79,30 @@ func (r *Reloader) loadMoney(startup bool) error {
 	r.noteErr("correlation.yaml", err)
 	if err != nil && startup {
 		return fmt.Errorf("load correlation: %w", err)
+	}
+	cals, err := calendar.Load(filepath.Join(r.ConfigDir, "calendars.yaml"))
+	if err == nil {
+		r.cals.Store(cals)
+	}
+	r.noteErr("calendars.yaml", err)
+	if err != nil && startup {
+		return fmt.Errorf("load calendars: %w", err)
+	}
+	return nil
+}
+
+// checkCalendars rejects rules that name a calendar or cut-off that does not exist.
+func (r *Reloader) checkCalendars(c *rules.Compiled) error {
+	cals := r.Calendars()
+	for _, id := range c.Calendars() {
+		if _, ok := cals.Get(id); !ok {
+			return fmt.Errorf("unknown calendar %q (see calendars.yaml)", id)
+		}
+	}
+	if m := c.CutoffMode(); m != "" && m != "auto" {
+		if _, ok := cals.Named(m, time.Now()); !ok {
+			return fmt.Errorf("unknown cut-off %q (use auto or a cut-off name from calendars.yaml)", m)
+		}
 	}
 	return nil
 }
@@ -152,7 +179,7 @@ func (r *Reloader) rebuildRules(ctx context.Context) error {
 	r.dbVersion = version
 	r.mu.Unlock()
 
-	rs := rules.Build(merged, r.Window)
+	rs := rules.Build(merged, r.Window, r.checkCalendars)
 	rs.Errors = append(fileErrs, rs.Errors...)
 	r.Engine.Swap(rs)
 	r.Log.Info("rules loaded", "count", len(rs.Rules), "fromFiles", len(r.fileRules), "fromAPI", len(stored),

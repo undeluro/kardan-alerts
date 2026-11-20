@@ -8,6 +8,7 @@
 package schema
 
 import (
+	"encoding/json"
 	"strconv"
 	"strings"
 	"time"
@@ -51,15 +52,33 @@ type Doc struct {
 	// or set by a person); they take precedence over the generic candidates.
 	Overrides map[string]string
 	// FX enables the $notionalUsd facet.
-	FX     Converter
+	FX Converter
+	// Vars are extra "$name" values for templates (aggregate totals,
+	// absence timings...).
+	Vars   map[string]gjson.Result
 	facets map[string]gjson.Result
 }
+
+// WithVars returns a copy of the document that also resolves vars.
+func (d *Doc) WithVars(vars map[string]gjson.Result) *Doc {
+	cp := *d
+	cp.Vars = vars
+	cp.facets = nil
+	return &cp
+}
+
+// Str and Num build synthetic values for Vars.
+func Str(s string) gjson.Result  { return str(s) }
+func Num(f float64) gjson.Result { return num(f) }
 
 func NewDoc(env *event.Envelope) *Doc { return &Doc{Env: env} }
 
 // Get resolves a payload path or a "$facet".
 func (d *Doc) Get(path string) gjson.Result {
 	if len(path) > 0 && path[0] == '$' {
+		if v, ok := d.Vars[path]; ok {
+			return v
+		}
 		return d.facet(path)
 	}
 	return gjson.GetBytes(d.Env.Payload, path)
@@ -174,4 +193,38 @@ func IsFacet(name string) bool {
 		}
 	}
 	return false
+}
+
+// EncodeVars stores template vars (aggregate totals, absence timings) with
+// an alert so later messages (escalations, digests) render the same text.
+func EncodeVars(vars map[string]gjson.Result) json.RawMessage {
+	if len(vars) == 0 {
+		return nil
+	}
+	m := make(map[string]any, len(vars))
+	for k, v := range vars {
+		switch v.Type {
+		case gjson.Number:
+			m[k] = v.Num
+		case gjson.True, gjson.False:
+			m[k] = v.Bool()
+		default:
+			m[k] = v.String()
+		}
+	}
+	b, _ := json.Marshal(m)
+	return b
+}
+
+// DecodeVars is the inverse of EncodeVars.
+func DecodeVars(raw []byte) map[string]gjson.Result {
+	if len(raw) == 0 {
+		return nil
+	}
+	out := map[string]gjson.Result{}
+	gjson.ParseBytes(raw).ForEach(func(k, v gjson.Result) bool {
+		out[k.String()] = v
+		return true
+	})
+	return out
 }

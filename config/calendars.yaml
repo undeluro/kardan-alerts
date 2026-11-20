@@ -1,0 +1,63 @@
+# Market and payment-system calendars: business days, holidays, opening hours
+# and daily cut-offs. Used by rules for "only during market hours", absence
+# deadlines ("by 18:30 on a business day") and cut-off urgency on alerts.
+#
+# ILLUSTRATIVE values for the demo. Check each operator's published schedule
+# before relying on them.
+note: Illustrative schedules and 2026 holidays; not an authoritative source.
+
+calendars:
+  - id: T2
+    name: T2 (EUR RTGS)
+    timezone: Europe/Berlin
+    businessDays: Mon-Fri
+    holidays: [2026-01-01, 2026-04-03, 2026-04-06, 2026-05-01, 2026-12-25, 2026-12-26]
+    hours: "07:00-18:00"
+    cutoffs:
+      - { name: T2 customer payments, at: "17:00", currencies: [EUR] }
+      - { name: T2 interbank payments, at: "18:00", currencies: [EUR] }
+
+  - id: FEDWIRE
+    name: Fedwire Funds (USD)
+    timezone: America/New_York
+    businessDays: Mon-Fri
+    holidays: [2026-01-01, 2026-01-19, 2026-02-16, 2026-05-25, 2026-06-19, 2026-09-07, 2026-10-12, 2026-11-11, 2026-11-26, 2026-12-25]
+    hours: "09:00-19:00"
+    cutoffs:
+      - { name: Fedwire customer transfers, at: "18:00", currencies: [USD] }
+      - { name: Fedwire close, at: "19:00", currencies: [USD] }
+
+  - id: CHAPS
+    name: CHAPS (GBP RTGS)
+    timezone: Europe/London
+    businessDays: Mon-Fri
+    holidays: [2026-01-01, 2026-04-03, 2026-04-06, 2026-05-04, 2026-05-25, 2026-08-31, 2026-12-25, 2026-12-28]
+    hours: "06:00-18:00"
+    cutoffs:
+      - { name: CHAPS customer payments, at: "17:40", currencies: [GBP] }
+      - { name: CHAPS interbank, at: "18:00", currencies: [GBP] }
+
+  # CLS settles FX trades in one window; its cut-offs carry no currencies,
+  # so rules race them by name (cutoff: CLS pay-in deadline).
+  - id: CLS
+    name: CLS FX settlement
+    timezone: Europe/Berlin
+    businessDays: Mon-Fri
+    holidays: [2026-01-01, 2026-12-25]
+    hours: "07:00-12:00"
+    cutoffs:
+      - { name: CLS pay-in deadline, at: "10:00" }
+
+  - id: XLON
+    name: London desk hours
+    timezone: Europe/London
+    businessDays: Mon-Fri
+    holidays: [2026-01-01, 2026-04-03, 2026-04-06, 2026-05-04, 2026-05-25, 2026-08-31, 2026-12-25, 2026-12-28]
+    hours: "07:00-18:00"
+
+  - id: XNYS
+    name: New York Stock Exchange
+    timezone: America/New_York
+    businessDays: Mon-Fri
+    holidays: [2026-01-01, 2026-01-19, 2026-02-16, 2026-04-03, 2026-05-25, 2026-06-19, 2026-07-03, 2026-09-07, 2026-11-26, 2026-12-25]
+    hours: "09:30-16:00"

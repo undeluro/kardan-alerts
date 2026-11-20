@@ -23,6 +23,8 @@ type predicate func(d *schema.Doc) bool
 type Field struct {
 	Label string `json:"label"`
 	Path  string `json:"path"`
+	// format renders "path | number" style fields; nil shows the raw value.
+	format *tmpl.Template
 }
 
 // Compiled is a rule turned into closures: paths are parsed, regexes and
@@ -42,6 +44,8 @@ type Compiled struct {
 	groupWindow  time.Duration
 	recovery     predicate     // autoResolve.when
 	ResolveAfter time.Duration // autoResolve.after (0 = never)
+
+	timeAware
 }
 
 var defaultTitle = tmpl.MustCompile("{{$type | default \"event\"}} from {{$service | default \"unknown service\"}}")
@@ -90,7 +94,11 @@ func Compile(r Rule, defaultWindow time.Duration) (*Compiled, error) {
 		c.Window = w
 	}
 	for _, p := range r.Presentation.Fields {
-		c.Fields = append(c.Fields, parseField(p))
+		f, err := parseField(p)
+		if err != nil {
+			return nil, wrap(fmt.Errorf("presentation.fields %q: %w", p, err))
+		}
+		c.Fields = append(c.Fields, f)
 	}
 	if g := r.Group; g != nil {
 		if len(g.By) == 0 {
@@ -122,6 +130,9 @@ func Compile(r Rule, defaultWindow time.Duration) (*Compiled, error) {
 			c.ResolveAfter = d
 		}
 	}
+	if err := c.compileTimeAware(r); err != nil {
+		return nil, wrap(err)
+	}
 	for i, rt := range r.Routing {
 		if !strings.HasPrefix(rt.To, "team:") && !strings.HasPrefix(rt.To, "user:") && !strings.HasPrefix(rt.To, "oncall:") {
 			return nil, wrap(fmt.Errorf("routing[%d].to %q must start with team:, oncall: or user:", i, rt.To))
@@ -147,12 +158,24 @@ func optionalTemplate(src string, def *tmpl.Template) (*tmpl.Template, error) {
 	return tmpl.Compile(src)
 }
 
-// parseField accepts "path" or "Label=path".
-func parseField(spec string) Field {
+// parseField accepts "path", "Label=path" and either with filters:
+// "Rejected USD=$sum | number".
+func parseField(spec string) (Field, error) {
+	f := Field{Path: spec}
 	if label, path, ok := strings.Cut(spec, "="); ok {
-		return Field{Label: strings.TrimSpace(label), Path: strings.TrimSpace(path)}
+		f.Label, f.Path = strings.TrimSpace(label), strings.TrimSpace(path)
 	}
-	return Field{Label: humanize(spec), Path: spec}
+	if path, _, ok := strings.Cut(f.Path, "|"); ok {
+		t, err := tmpl.Compile("{{" + f.Path + "}}")
+		if err != nil {
+			return f, err
+		}
+		f.Path, f.format = strings.TrimSpace(path), t
+	}
+	if f.Label == "" {
+		f.Label = humanize(f.Path)
+	}
+	return f, nil
 }
 
 // humanize turns "payload.tradeId" into "Trade Id" and "error.message" into "Message".
@@ -225,6 +248,9 @@ func (c *Compiled) RenderWith(get tmpl.Resolver, sensitive func(path string) boo
 		if r.IsObject() || r.IsArray() {
 			v = r.Raw
 		}
+		if f.format != nil {
+			v = f.format.Render(get)
+		}
 		rf := RenderedField{Label: f.Label, Value: v}
 		if sensitive != nil && sensitive(f.Path) {
 			rf.Sensitive = true
@@ -233,6 +259,9 @@ func (c *Compiled) RenderWith(get tmpl.Resolver, sensitive func(path string) boo
 	}
 	return out
 }
+
+// ColorFor is the default colour for a severity.
+func ColorFor(sev string) string { return colorFor(sev) }
 
 func colorFor(sev string) string {
 	switch sev {

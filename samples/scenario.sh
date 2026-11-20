@@ -7,7 +7,9 @@
 #   ./samples/scenario.sh counterparty-outage
 #   ./samples/scenario.sh recovery
 #   ./samples/scenario.sh pricing-burst
+#   PACE=1 ./samples/scenario.sh rejection-burst   # one event per second
 set -eu
+PACE="${PACE:-}"
 URL="${KARDAN_URL:-http://localhost:8080}"
 ROOT="$(cd "$(dirname "$0")" && pwd)/scenarios"
 NAME="${1:-}"
@@ -20,6 +22,18 @@ for f in "$ROOT/$NAME"/*; do
     *.json|*.xml) path="/ingest/$src" ;;
     *)            path="/ingest/$src/batch" ;;
   esac
+  if [ -n "$PACE" ] && [ "${path%/batch}" != "$path" ]; then
+    n=0
+    while IFS= read -r line || [ -n "$line" ]; do
+      [ -z "$line" ] && continue
+      n=$((n+1))
+      printf '%-22s #%-3s -> ' "$src" "$n"
+      printf '%s' "$line" | curl -sS -X POST --data-binary @- "$URL/ingest/$src"
+      echo
+      sleep "$PACE"
+    done < "$f"
+    continue
+  fi
   printf '%-22s -> ' "$src"
   curl -sS -X POST --data-binary "@$f" "$URL$path"
   echo

@@ -16,10 +16,12 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 	"github.com/tidwall/gjson"
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	"github.com/undeluro/kardan-alerts/internal/alerting"
+	"github.com/undeluro/kardan-alerts/internal/calendar"
 	"github.com/undeluro/kardan-alerts/internal/directory"
 	"github.com/undeluro/kardan-alerts/internal/event"
 	"github.com/undeluro/kardan-alerts/internal/finance"
@@ -39,6 +41,8 @@ type Processor struct {
 	Privacy     func() *privacy.Policy
 	FX          func() *finance.FX
 	Correlation func() *finance.Correlation
+	Calendars   func() *calendar.Set
+	Redis       *redis.Client // aggregate windows and absence state
 	Throttler   *notify.Throttler
 	Clock       *clock.Clock      // business time for working hours and on-call
 	Fallbacks   map[string]string // channel -> fallback channel, e.g. sms -> email
@@ -120,13 +124,21 @@ type group struct {
 	corrField string
 	corrValue string
 
-	kind   string // notification kind: alert (default) | digest
+	kind   string // notification kind: alert (default) | digest | escalation
 	digest string // appended to titles of digest notifications
+
+	cutoffName   *string
+	cutoffAt     *time.Time
+	baseImpact   int
+	uiOnly       bool          // downgraded outside market hours: no external notifications
+	routes       []rules.Route // overrides the rule's routing (escalation steps)
+	reasonPrefix string        // prepended to delivery reasons (escalation)
 }
 
 type recovery struct {
-	rule *rules.Compiled
-	at   time.Time
+	rule   *rules.Compiled
+	at     time.Time
+	reason string
 }
 
 // newGroup prepares the alert for the first event of a fingerprint: UI
@@ -142,7 +154,18 @@ func (p *Processor) newGroup(c *rules.Compiled, fp string, doc *schema.Doc, sig 
 		v := usd.Num
 		g.notional = &v
 	}
-	g.impact = finance.Impact(g.rendered.Severity, deref(g.notional), g.notional != nil)
+	if cal, off := c.During(); cal != "" && off != "suppress" && !p.calendarOpen(cal) {
+		// Outside the rule's market hours: keep the alert, at a lower level, UI only.
+		g.rendered.Severity, g.rendered.Color, g.uiOnly = off, rules.ColorFor(off), true
+		g.rendered.Body = strings.TrimSpace(g.rendered.Body + "\n(outside " + cal + " hours: downgraded to " + off + ", UI only)")
+	}
+	g.baseImpact = finance.Impact(g.rendered.Severity, deref(g.notional), g.notional != nil)
+	g.impact = g.baseImpact
+	if d, ok := p.cutoffFor(c, doc); ok {
+		name, at := d.Name+" ("+d.Calendar+")", d.At
+		g.cutoffName, g.cutoffAt = &name, &at
+		g.impact = min(100, g.baseImpact+finance.Urgency(at, p.Clock.Now()))
+	}
 	if c.Grouped() {
 		s, e := c.WindowFor(env.ReceivedAt)
 		g.winStart, g.winEnd = &s, &e
@@ -158,6 +181,50 @@ func deref(f *float64) float64 {
 	return *f
 }
 
+// calendarOpen reports whether a calendar is open at business time "now".
+// Unknown calendars count as open (the rule loader reports them).
+func (p *Processor) calendarOpen(id string) bool {
+	c, ok := p.cals().Get(id)
+	return !ok || c.IsOpen(p.Clock.Now())
+}
+
+// cutoffFor finds the deadline an alert races against: the next cut-off
+// for the event's currency ("auto") or a named cut-off.
+func (p *Processor) cutoffFor(c *rules.Compiled, doc *schema.Doc) (calendar.Deadline, bool) {
+	mode := c.CutoffMode()
+	if mode == "" {
+		return calendar.Deadline{}, false
+	}
+	set, now := p.cals(), p.Clock.Now()
+	if mode == "auto" {
+		return set.NextCutoff(doc.Get("$currency").String(), now)
+	}
+	return set.Named(mode, now)
+}
+
+type aggOp struct {
+	rule   *rules.Compiled
+	fp     string
+	values []string
+	doc    *schema.Doc
+	sig    string
+	value  float64
+}
+
+type absenceSeen struct {
+	rule *rules.Compiled
+	key  string // sender
+	fp   string // fingerprint of today's / the heartbeat "missing" alert
+}
+
+// cals is the current calendar set (nil-safe).
+func (p *Processor) cals() *calendar.Set {
+	if p.Calendars == nil {
+		return nil
+	}
+	return p.Calendars()
+}
+
 func (p *Processor) processBatch(ctx context.Context, recs []*kgo.Record) error {
 	start := time.Now()
 	rs := p.Engine.Current()
@@ -165,6 +232,8 @@ func (p *Processor) processBatch(ctx context.Context, recs []*kgo.Record) error 
 	groups := map[string]*group{}
 	recoveries := map[string]recovery{}
 	observed := map[string]*schema.Observation{}
+	var aggs []aggOp
+	var seen []absenceSeen
 
 	for _, rec := range recs {
 		env := &event.Envelope{}
@@ -201,9 +270,35 @@ func (p *Processor) processBatch(ctx context.Context, recs []*kgo.Record) error 
 			}
 		}
 
+		for _, c := range rs.Aggregates(doc) {
+			values, fp := c.AggregateKey(doc)
+			v := 1.0
+			if f := c.Aggregate().SumField; f != "" {
+				if r := doc.Get(f); r.Exists() {
+					v = r.Float()
+				} else {
+					v = 0
+				}
+			}
+			aggs = append(aggs, aggOp{rule: c, fp: fp, values: values, doc: doc, sig: sig, value: v})
+		}
+		for _, c := range rs.Absences(doc) {
+			key := orNoSender(c.AbsenceKey(doc))
+			day := ""
+			if spec := c.Absence(); spec.Deadline >= 0 {
+				if cal, ok := p.cals().Get(spec.Calendar); ok {
+					day = p.Clock.Now().In(cal.Location()).Format("2006-01-02")
+				}
+			}
+			seen = append(seen, absenceSeen{rule: c, key: key, fp: c.AbsenceFingerprint(key, day)})
+		}
+
 		for _, c := range rs.Match(doc) {
 			if recovered[c.Rule.ID] {
 				continue
+			}
+			if cal, off := c.During(); cal != "" && off == "suppress" && !p.calendarOpen(cal) {
+				continue // outside market hours and the rule says to stay quiet
 			}
 			metrics.RuleMatches.WithLabelValues(c.Rule.ID).Inc()
 			fp := c.Fingerprint(doc)
@@ -226,6 +321,17 @@ func (p *Processor) processBatch(ctx context.Context, recs []*kgo.Record) error 
 				g.impact = max(g.impact, finance.Impact(g.rendered.Severity, v, true))
 			}
 		}
+	}
+	// The expected event arrived: close the "missing" alert for that sender.
+	reopened, err := p.recordAbsenceSeen(ctx, seen)
+	if err != nil {
+		return err
+	}
+	for _, s := range reopened {
+		recoveries[s.fp] = recovery{rule: s.rule, at: time.Now(), reason: "the expected event arrived"}
+	}
+	if err := p.applyAggregates(ctx, aggs, groups, corr); err != nil {
+		return err
 	}
 	if len(groups) == 0 && len(recoveries) == 0 {
 		p.recordSchemas(ctx, observed)
@@ -271,11 +377,15 @@ func (p *Processor) processBatch(ctx context.Context, recs []*kgo.Record) error 
 			Impact:       g.impact,
 			WindowStart:  g.winStart,
 			WindowEnd:    g.winEnd,
-		}}
+			CutoffName:   g.cutoffName,
+			CutoffAt:     g.cutoffAt,
+			BaseImpact:   g.baseImpact,
+			Vars:         schema.EncodeVars(g.first.Vars),
+		}, Refresh: g.rule.Kind() == rules.KindAggregate}
 	}
 
 	var updates []alerting.Update
-	err := pgx.BeginFunc(ctx, p.Pool, func(tx pgx.Tx) error {
+	err = pgx.BeginFunc(ctx, p.Pool, func(tx pgx.Tx) error {
 		updates = updates[:0]
 		var outbox []alerting.Notification
 		dir := p.Directory()
@@ -304,8 +414,9 @@ func (p *Processor) processBatch(ctx context.Context, recs []*kgo.Record) error 
 						KeyValue: g.corrValue, Team: a.Team, Severity: a.Severity, NotionalUSD: deref(a.NotionalUSD),
 						Impact: a.Impact, At: a.FirstSeen})
 				}
-				// Windowed alerts notify once, as a digest, when the window closes.
-				if !g.rule.Grouped() {
+				// Windowed alerts notify once, as a digest, when the window closes;
+				// downgraded (outside hours) alerts stay in the UI.
+				if !g.rule.Grouped() && !g.uiOnly {
 					outbox = append(outbox, p.notificationsFor(ctx, &a, g, dir, now)...)
 				}
 				ac := a
@@ -327,14 +438,18 @@ func (p *Processor) processBatch(ctx context.Context, recs []*kgo.Record) error 
 		}
 
 		for _, fp := range recFPs {
-			a, err := alerting.ResolveFingerprint(ctx, tx, fp, "auto: recovery event received")
+			why := recoveries[fp].reason
+			if why == "" {
+				why = "recovery event received"
+			}
+			a, err := alerting.ResolveFingerprint(ctx, tx, fp, "auto: "+why)
 			if alerting.IsNotFound(err) {
 				continue // nothing open: recovery for an alert we never opened
 			}
 			if err != nil {
 				return err
 			}
-			clear, err := p.allClear(ctx, tx, a, "the source reported recovery")
+			clear, err := p.allClear(ctx, tx, a, why)
 			if err != nil {
 				return err
 			}
@@ -348,6 +463,7 @@ func (p *Processor) processBatch(ctx context.Context, recs []*kgo.Record) error 
 	if err != nil {
 		return err
 	}
+	p.forgetAbsences(ctx, reopened)
 
 	for _, u := range updates {
 		switch u.Kind {
@@ -464,8 +580,13 @@ func (p *Processor) notificationsFor(ctx context.Context, a *alerting.Alert, g *
 		seen[key] = true
 		plan = append(plan, d)
 	}
-	for _, route := range g.rule.Rule.Routing {
+	routes := g.rule.Rule.Routing
+	if g.routes != nil {
+		routes = g.routes
+	}
+	for _, route := range routes {
 		people, why := dir.Resolve(route.To, now)
+		why = join(g.reasonPrefix, why)
 		if len(people) == 0 {
 			p.Log.Warn("route target resolves to nobody", "rule", a.RuleID, "to", route.To)
 		}
@@ -503,6 +624,9 @@ func (p *Processor) notificationsFor(ctx context.Context, a *alerting.Alert, g *
 			cp.Title, cp.Body, cp.Fields = pres.Title, pres.Body, pres.Fields
 			if g.digest != "" {
 				cp.Title += " — " + g.digest
+			}
+			if g.kind == "escalation" {
+				cp.Title = "ESCALATED: " + cp.Title
 			}
 			ma = &cp
 			masked[lvl] = ma
@@ -587,4 +711,135 @@ func windowLabel(start, end *time.Time) string {
 		layout = "15:04:05"
 	}
 	return fmt.Sprintf("%s–%s UTC", start.UTC().Format(layout), end.UTC().Format(layout))
+}
+
+func orNoSender(key string) string {
+	if key == "" {
+		return noSender
+	}
+	return key
+}
+
+// recordAbsenceSeen remembers when each expected sender last reported (real
+// and business time: heartbeats measure real silence, deadlines compare with
+// the business day) and returns the senders whose "missing" alert is open.
+func (p *Processor) recordAbsenceSeen(ctx context.Context, seen []absenceSeen) ([]absenceSeen, error) {
+	if len(seen) == 0 || p.Redis == nil {
+		return nil, nil
+	}
+	real, biz := time.Now().UnixMilli(), p.Clock.Now().UnixMilli()
+	stamp := strconv.FormatInt(real, 10) + ":" + strconv.FormatInt(biz, 10)
+	pipe := p.Redis.Pipeline()
+	open := map[string]*redis.StringSliceCmd{}
+	for _, s := range seen {
+		id := s.rule.Rule.ID
+		pipe.HSet(ctx, absenceKey(id), s.key, stamp)
+		if open[id] == nil {
+			open[id] = pipe.SMembers(ctx, absenceOpenKey(id))
+		}
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, err
+	}
+	var out []absenceSeen
+	done := map[string]bool{}
+	for _, s := range seen {
+		if done[s.fp] {
+			continue
+		}
+		for _, fp := range open[s.rule.Rule.ID].Val() {
+			if fp == s.fp {
+				out = append(out, s)
+				done[s.fp] = true
+			}
+		}
+	}
+	return out, nil
+}
+
+// forgetAbsences drops resolved "missing" alerts from the open sets.
+func (p *Processor) forgetAbsences(ctx context.Context, resolved []absenceSeen) {
+	if len(resolved) == 0 {
+		return
+	}
+	pipe := p.Redis.Pipeline()
+	for _, s := range resolved {
+		pipe.SRem(ctx, absenceOpenKey(s.rule.Rule.ID), s.fp)
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		p.Log.Warn("forget absence alerts", "err", err)
+	}
+}
+
+// applyAggregates adds each event to its rule's sliding window. When a key's
+// window total reaches the threshold, its aggregate alert opens (or, if open,
+// takes the new total: the alert count is the peak events in the window).
+func (p *Processor) applyAggregates(ctx context.Context, ops []aggOp, groups map[string]*group, corr *finance.Correlation) error {
+	if len(ops) == 0 || p.Redis == nil {
+		return nil
+	}
+	run := func(c redis.Scripter, op aggOp) *redis.Cmd {
+		member := op.doc.Env.ID + "|" + strconv.FormatFloat(op.value, 'f', -1, 64)
+		return aggAdd.Run(ctx, c, []string{aggKey(op.rule.Rule.ID, op.fp)},
+			op.doc.Env.ReceivedAt.UnixMilli(), op.rule.Aggregate().Window.Milliseconds(), member)
+	}
+	// Load the script once so the pipelined EVALSHAs below cannot miss.
+	if err := aggAdd.Load(ctx, p.Redis).Err(); err != nil {
+		return err
+	}
+	pipe := p.Redis.Pipeline()
+	cmds := make([]*redis.Cmd, len(ops))
+	for i, op := range ops {
+		cmds[i] = run(pipe, op)
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return err
+	}
+	// The last crossing per key carries the running total for this batch.
+	type crossing struct {
+		op    aggOp
+		total windowTotal
+		value float64
+	}
+	last := map[string]crossing{}
+	var order []string
+	for i, op := range ops {
+		total, err := parseTotal(cmds[i].Val())
+		if err != nil {
+			return err
+		}
+		spec := op.rule.Aggregate()
+		value := float64(total.Count)
+		if spec.SumField != "" {
+			value = total.Sum
+		}
+		if value < spec.Threshold {
+			continue
+		}
+		if _, ok := last[op.fp]; !ok {
+			order = append(order, op.fp)
+		}
+		last[op.fp] = crossing{op, total, value}
+	}
+	for _, fp := range order {
+		x := last[fp]
+		spec := x.op.rule.Aggregate()
+		vars := map[string]gjson.Result{
+			"$count":     schema.Num(float64(x.total.Count)),
+			"$sum":       schema.Num(x.total.Sum),
+			"$value":     schema.Num(x.value),
+			"$threshold": schema.Num(spec.Threshold),
+			"$window":    schema.Str(rules.HumanWindow(spec.Window)),
+			"$key":       schema.Str(strings.Join(x.op.values, " / ")),
+		}
+		if spec.SumField == "$notionalUsd" {
+			vars["$notionalUsd"] = schema.Num(x.total.Sum) // money at risk is the window total
+		}
+		g := p.newGroup(x.op.rule, fp, x.op.doc.WithVars(vars), x.op.sig, corr)
+		env := x.op.doc.Env
+		g.count, g.lastAt, g.lastID = x.total.Count, env.ReceivedAt, env.ID
+		metrics.RuleMatches.WithLabelValues(x.op.rule.Rule.ID).Inc()
+		groups[fp] = g
+	}
+	return nil
 }
