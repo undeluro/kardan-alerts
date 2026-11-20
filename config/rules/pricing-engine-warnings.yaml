@@ -1,0 +1,20 @@
+# Team Pricing: log lines from pricing-engine-* at WARN or above -> UI only;
+# one alert per instrument (5-minute digests arrive with grouping in M5).
+id: pricing-engine-warnings
+name: Pricing engine warnings
+team: pricing
+match:
+  all:
+    - { field: $service,  op: glob,            value: "pricing-engine-*" }
+    - { field: $severity, op: severityAtLeast, value: warning }
+routing:
+  - { to: team:pricing, channels: [ui] }
+presentation:
+  title: "{{$service}}: {{message | truncate 120}}"
+  fields:
+    - Instrument=instrument
+    - Instance=$service
+    - Latency ms=latencyMs
+dedup:
+  key: "{{instrument | default \"unknown\"}}"
+  window: 5m

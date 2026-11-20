@@ -1,0 +1,16 @@
+# People and teams. Phone numbers use reserved fictional ranges; emails go to
+# Mailpit in the demo (http://localhost:8025).
+people:
+  - { id: anna,  name: Anna Kowalska,   email: anna@example.com,  phone: "+44 7700 900101", timezone: Europe/London }
+  - { id: sam,   name: Sam Okafor,      email: sam@example.com,   phone: "+44 7700 900102", timezone: Europe/London }
+  - { id: maria, name: Maria Rossi,     email: maria@example.com, phone: "+44 7700 900103", timezone: Europe/London }
+  - { id: priya, name: Priya Raman,     email: priya@example.com, phone: "+1 212 555 0104", timezone: America/New_York }
+  - { id: lee,   name: Lee Chen,        email: lee@example.com,   phone: "+852 5550 0105",  timezone: Asia/Hong_Kong }
+  - { id: tom,   name: Tom Becker,      email: tom@example.com,   phone: "+49 30 5550106",  timezone: Europe/Berlin }
+
+teams:
+  - { id: settlements,          name: Settlements Operations, members: [sam, maria] }
+  - { id: pricing,              name: Pricing Engineering,    members: [lee] }
+  - { id: rates,                name: Rates Desk Support,     members: [priya] }
+  - { id: payments,             name: Payments Platform,      members: [anna, tom] }
+  - { id: counterparty-support, name: Counterparty Support,   members: [tom] }

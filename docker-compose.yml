@@ -1,0 +1,101 @@
+# One command from a fresh clone:  docker compose up --build
+#
+#   UI + API ...... http://localhost:8080
+#   Mailpit ....... http://localhost:8025   (every email the service sends)
+#   Metrics ....... http://localhost:8080/metrics
+#
+# Scale the workers horizontally:  docker compose up -d --scale worker=3
+name: kardan
+
+x-kardan: &kardan
+  image: kardan:dev
+  restart: unless-stopped
+  environment: &kardan-env
+    POSTGRES_URL: postgres://kardan:kardan@postgres:5432/kardan?sslmode=disable
+    REDIS_ADDR: redis:6379
+    KAFKA_BROKERS: redpanda:9092
+    SMTP_ADDR: mailpit:1025
+    PUBLIC_URL: http://localhost:8080
+  volumes:
+    - ./config:/app/config:ro # edit rules/teams without rebuilding
+  depends_on:
+    postgres: { condition: service_healthy }
+    redis: { condition: service_healthy }
+    redpanda: { condition: service_healthy }
+    mailpit: { condition: service_started }
+
+services:
+  # Edge replicas: HTTP ingest, REST API, live feed, UI.
+  api:
+    <<: *kardan
+    build: . # builds kardan:dev once; worker reuses the same image
+    environment:
+      <<: *kardan-env
+      ROLES: api,ingest
+    ports:
+      - "8080:8080"
+
+  # Worker replicas: rules, dedup, alerts, outbox delivery. Stateless; scale freely
+  # (up to the events topic's partition count for processing parallelism).
+  worker:
+    <<: *kardan
+    pull_policy: never # local image built by the api service
+    environment:
+      <<: *kardan-env
+      ROLES: processor,dispatcher
+
+  redpanda:
+    image: redpandadata/redpanda:v25.1.1
+    command:
+      - redpanda
+      - start
+      - --mode=dev-container
+      - --smp=1
+      - --memory=1G
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
+    ports:
+      - "19092:19092"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true' || exit 1"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+    volumes:
+      - redpanda:/var/lib/redpanda/data
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: kardan
+      POSTGRES_PASSWORD: kardan
+      POSTGRES_DB: kardan
+    command: ["postgres", "-c", "max_connections=300", "-c", "synchronous_commit=on"]
+    ports:
+      - "15432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kardan -d kardan"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - postgres:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7.4-alpine
+    ports:
+      - "16379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  mailpit:
+    image: axllent/mailpit:v1.21
+    ports:
+      - "8025:8025"
+
+volumes:
+  redpanda:
+  postgres:

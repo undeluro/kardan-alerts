@@ -1,0 +1,25 @@
+# Go
+/bin/
+*.test
+*.out
+coverage.*
+
+# Web
+web/node_modules/
+web/dist/*
+!web/dist/.gitkeep
+
+# Local env / secrets
+.env
+.env.*
+!.env.example
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Task photos are large; keep them out of the repo
+task/*.HEIC

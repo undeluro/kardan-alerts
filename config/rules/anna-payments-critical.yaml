@@ -1,0 +1,19 @@
+# Anna (personal): anything critical from payments-api -> SMS between 08:00 and
+# 20:00, otherwise email. (Time-window preferences arrive in M4; until then
+# both channels are used.)
+id: anna-payments-critical
+name: Anna — critical payments-api alerts
+team: payments
+match:
+  all:
+    - { field: $severity, op: eq, value: critical }
+    - { field: $service,  op: eq, value: payments-api }
+routing:
+  - { to: user:anna, channels: [sms, email, ui] }
+presentation:
+  title: "{{$type}} on {{$service}}"
+  body: "{{annotations.summary}}"
+  fields:
+    - Region=labels.region
+    - Status=status
+    - Since=startsAt
