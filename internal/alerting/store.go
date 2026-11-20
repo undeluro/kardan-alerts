@@ -21,7 +21,8 @@ var ErrNotFound = errors.New("not found")
 
 const alertColumns = `id, fingerprint, rule_id, team, status, severity, color, title, body, fields,
 	source_id, first_event_id, last_event_id, sample, sample_raw, sample_format, count, first_seen, last_seen,
-	acked_by, acked_at, resolved_by, resolved_at, created_at, updated_at`
+	acked_by, acked_at, resolved_by, resolved_at, created_at, updated_at,
+	notional_usd, impact, incident_id, window_start, window_end`
 
 func scanAlert(row pgx.Row) (*Alert, error) {
 	var a Alert
@@ -29,7 +30,8 @@ func scanAlert(row pgx.Row) (*Alert, error) {
 	err := row.Scan(&a.ID, &a.Fingerprint, &a.RuleID, &a.Team, &a.Status, &a.Severity, &a.Color, &a.Title,
 		&a.Body, &fields, &a.SourceID, &a.FirstEventID, &a.LastEventID, &a.Sample, &a.SampleRaw, &a.SampleFormat,
 		&a.Count, &a.FirstSeen,
-		&a.LastSeen, &a.AckedBy, &a.AckedAt, &a.ResolvedBy, &a.ResolvedAt, &a.CreatedAt, &a.UpdatedAt)
+		&a.LastSeen, &a.AckedBy, &a.AckedAt, &a.ResolvedBy, &a.ResolvedAt, &a.CreatedAt, &a.UpdatedAt,
+		&a.NotionalUSD, &a.Impact, &a.IncidentID, &a.WindowStart, &a.WindowEnd)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -76,17 +78,19 @@ func Upsert(ctx context.Context, tx pgx.Tx, in []UpsertInput) ([]UpsertResult, e
 		b.Queue(`
 			INSERT INTO alerts (id, fingerprint, rule_id, team, severity, color, title, body, fields,
 			                    source_id, first_event_id, last_event_id, sample, count, first_seen, last_seen,
-			                    sample_raw, sample_format)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+			                    sample_raw, sample_format, notional_usd, impact, window_start, window_end)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
 			ON CONFLICT (fingerprint) WHERE status <> 'resolved' DO UPDATE SET
 			    count         = alerts.count + EXCLUDED.count,
 			    last_seen     = GREATEST(alerts.last_seen, EXCLUDED.last_seen),
 			    last_event_id = EXCLUDED.last_event_id,
+			    notional_usd  = GREATEST(alerts.notional_usd, EXCLUDED.notional_usd),
+			    impact        = GREATEST(alerts.impact, EXCLUDED.impact),
 			    updated_at    = now()
 			RETURNING id, count, last_seen, (xmax = 0) AS inserted`,
 			a.ID, a.Fingerprint, a.RuleID, a.Team, a.Severity, a.Color, a.Title, a.Body, fields,
 			a.SourceID, a.FirstEventID, a.LastEventID, a.Sample, a.Count, a.FirstSeen, a.LastSeen,
-			a.SampleRaw, a.SampleFormat)
+			a.SampleRaw, a.SampleFormat, a.NotionalUSD, a.Impact, a.WindowStart, a.WindowEnd)
 	}
 	br := tx.SendBatch(ctx, b)
 	defer br.Close()
@@ -120,13 +124,21 @@ func InsertNotifications(ctx context.Context, tx pgx.Tx, ns []Notification) erro
 			if isFallback {
 				fb = n.FallbackFor
 			}
+			kind := n.Kind
+			if kind == "" {
+				kind = "alert"
+			}
+			next := n.NextAttemptAt
+			if next.IsZero() {
+				next = time.Now()
+			}
 			rows = append(rows, []any{n.ID, n.AlertID, n.Recipient, n.Channel, n.Address, n.Subject, n.BodyText,
-				n.BodyHTML, n.EventReceivedAt, status, fb, n.Reason})
+				n.BodyHTML, n.EventReceivedAt, status, fb, n.Reason, kind, next})
 		}
 	}
 	_, err := tx.CopyFrom(ctx, pgx.Identifier{"notifications"},
 		[]string{"id", "alert_id", "recipient", "channel", "address", "subject", "body_text", "body_html",
-			"event_received_at", "status", "fallback_for", "reason"},
+			"event_received_at", "status", "fallback_for", "reason", "kind", "next_attempt_at"},
 		pgx.CopyFromRows(rows))
 	if err != nil {
 		return fmt.Errorf("insert notifications: %w", err)
@@ -151,9 +163,11 @@ func IsRetryable(err error) bool {
 // ---- read / state path (API) --------------------------------------------------
 
 type ListFilter struct {
-	Team   string
-	Status string // open | acked | resolved | active (open+acked) | "" (all)
-	Limit  int
+	Team     string
+	Status   string // open | acked | resolved | active (open+acked) | "" (all)
+	Incident string
+	Sort     string // recent (default) | impact | money
+	Limit    int
 }
 
 func (s *Store) List(ctx context.Context, f ListFilter) ([]*Alert, error) {
@@ -162,6 +176,10 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]*Alert, error) {
 	if f.Team != "" {
 		args = append(args, f.Team)
 		where = append(where, fmt.Sprintf("team = $%d", len(args)))
+	}
+	if f.Incident != "" {
+		args = append(args, f.Incident)
+		where = append(where, fmt.Sprintf("incident_id = $%d", len(args)))
 	}
 	switch f.Status {
 	case "":
@@ -179,7 +197,14 @@ func (s *Store) List(ctx context.Context, f ListFilter) ([]*Alert, error) {
 		q += " WHERE " + strings.Join(where, " AND ")
 	}
 	args = append(args, f.Limit)
-	q += fmt.Sprintf(" ORDER BY last_seen DESC LIMIT $%d", len(args))
+	order := "last_seen DESC"
+	switch f.Sort {
+	case "impact":
+		order = "impact DESC, last_seen DESC"
+	case "money":
+		order = "notional_usd DESC NULLS LAST, impact DESC, last_seen DESC"
+	}
+	q += fmt.Sprintf(" ORDER BY %s LIMIT $%d", order, len(args))
 
 	rows, err := s.Pool.Query(ctx, q, args...)
 	if err != nil {

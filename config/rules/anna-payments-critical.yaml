@@ -17,3 +17,8 @@ presentation:
     - Region=labels.region
     - Status=status
     - Since=startsAt
+# Alertmanager sends the same alert with status "resolved" when it clears:
+# close the alert and tell Anna "all clear". Otherwise close after 2 h quiet.
+autoResolve:
+  when: { field: status, op: eq, value: resolved }
+  after: 2h

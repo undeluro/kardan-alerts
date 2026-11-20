@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, type Alert, type Stats } from "../api";
+import { api, type Alert, type Incident, type Stats } from "../api";
 import { AlertCard } from "../AlertCard";
 import { AlertDrawer } from "../AlertDrawer";
 import { navigate } from "../router";
-import type { StatusFilter } from "../useLiveAlerts";
+import type { SortOrder, StatusFilter } from "../useLiveAlerts";
+import { formatUSD, toneFor } from "../ui";
 
 interface Props {
   alerts: Alert[];
@@ -13,15 +14,35 @@ interface Props {
   team: string;
   filter: StatusFilter;
   setFilter: (f: StatusFilter) => void;
+  sort: SortOrder;
+  setSort: (s: SortOrder) => void;
+  incident: string;
+  setIncident: (id: string) => void;
   actor: string;
   now: number;
   openId: string | null;
   onToast: (msg: string) => void;
 }
 
-export function AlertsPage({ alerts, error, flash, replace, team, filter, setFilter, actor, now, openId, onToast }: Props) {
+export function AlertsPage(props: Props) {
+  const { alerts, error, flash, replace, team, filter, setFilter, sort, setSort, incident, setIncident } = props;
+  const { actor, now, openId, onToast } = props;
   const [stats, setStats] = useState<Stats | null>(null);
   const [busy, setBusy] = useState<Set<string>>(new Set());
+  const [incidents, setIncidents] = useState<Incident[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => api.incidents("open").then((l) => !cancelled && setIncidents(l)).catch(() => {});
+    void load();
+    const t = window.setInterval(load, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(t);
+    };
+  }, [alerts.length]);
+  const incidentById = useMemo(() => new Map(incidents.map((i) => [i.id, i])), [incidents]);
+  const selected = incident ? incidentById.get(incident) : undefined;
 
   useEffect(() => {
     let cancelled = false;
@@ -70,7 +91,48 @@ export function AlertsPage({ alerts, error, flash, replace, team, filter, setFil
         </div>
       )}
 
-      <div className="mb-3 flex items-center gap-1 text-sm">
+      {incidents.length > 0 && (
+        <div className="mb-4">
+          <div className="mb-1.5 text-xs font-medium tracking-wide text-gray-500 uppercase">Correlated incidents</div>
+          <div className="flex gap-2.5 overflow-x-auto pb-1">
+            {incidents.map((i) => (
+              <button
+                key={i.id}
+                onClick={() => setIncident(incident === i.id ? "" : i.id)}
+                className={`min-w-[260px] rounded-lg bg-white p-3 text-left ring-1 transition dark:bg-gray-900 ${
+                  incident === i.id ? "ring-2 ring-amber-500" : "ring-gray-200 hover:ring-gray-300 dark:ring-gray-800 dark:hover:ring-gray-700"
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <span className={`h-2 w-2 rounded-full ${toneFor(sevColor(i.maxSeverity)).dot}`} />
+                  <span className="text-xs text-gray-500">{incidentLabel(i.keyField)}</span>
+                  <span className="ml-auto rounded bg-gray-900 px-1.5 text-xs font-semibold text-white dark:bg-white dark:text-gray-900">
+                    {i.impact}
+                  </span>
+                </div>
+                <div className="mt-1 truncate font-semibold">{i.keyValue}</div>
+                <div className="mt-0.5 text-xs text-gray-600 dark:text-gray-300">
+                  {i.openAlerts} open alerts · {i.teams.join(", ")}
+                </div>
+                {i.notionalUsd > 0 && (
+                  <div className="mt-1 text-sm font-semibold text-emerald-700 dark:text-emerald-400">{formatUSD(i.notionalUsd)} at risk</div>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {incident && (
+        <div className="mb-3 flex items-center gap-2 rounded-md bg-amber-50 px-3 py-2 text-sm text-amber-900 ring-1 ring-amber-200 dark:bg-amber-500/10 dark:text-amber-200 dark:ring-amber-500/30">
+          Showing incident <b>{selected ? `${incidentLabel(selected.keyField)} ${selected.keyValue}` : incident}</b>
+          <button onClick={() => setIncident("")} className="ml-auto font-medium hover:underline">
+            Show all ✕
+          </button>
+        </div>
+      )}
+
+      <div className="mb-3 flex flex-wrap items-center gap-1 text-sm">
         {(
           [
             ["active", "Active"],
@@ -91,6 +153,16 @@ export function AlertsPage({ alerts, error, flash, replace, team, filter, setFil
           </button>
         ))}
         <span className="ml-auto text-xs text-gray-500">{alerts.length} shown</span>
+        <select
+          value={sort}
+          onChange={(e) => setSort(e.target.value as SortOrder)}
+          className="ml-2 rounded-md border-0 bg-white py-1.5 pr-8 pl-2.5 text-sm ring-1 ring-gray-300 ring-inset dark:bg-gray-900 dark:ring-gray-700"
+          aria-label="Sort"
+        >
+          <option value="impact">Sort: impact</option>
+          <option value="money">Sort: money at risk</option>
+          <option value="recent">Sort: most recent</option>
+        </select>
       </div>
 
       {error && <div className="mb-3 rounded-md bg-red-50 p-3 text-sm text-red-700 dark:bg-red-500/10 dark:text-red-300">{error}</div>}
@@ -103,6 +175,8 @@ export function AlertsPage({ alerts, error, flash, replace, team, filter, setFil
             <AlertCard
               key={a.id}
               alert={a}
+              incident={a.incidentId ? incidentById.get(a.incidentId) : undefined}
+              onIncident={(id) => setIncident(id)}
               now={now}
               flash={flash.has(a.id)}
               busy={busy.has(a.id)}
@@ -126,6 +200,20 @@ export function AlertsPage({ alerts, error, flash, replace, team, filter, setFil
       )}
     </>
   );
+}
+
+const sevColor = (s: string) => ({ critical: "red", error: "orange", warning: "amber", info: "blue" })[s] ?? "gray";
+
+const incidentLabels: Record<string, string> = {
+  $counterparty: "Counterparty",
+  $instrument: "Instrument",
+  $service: "Service",
+  $tradeId: "Trade",
+  $desk: "Desk",
+};
+
+export function incidentLabel(field: string) {
+  return incidentLabels[field] ?? field.replace("$", "");
 }
 
 function Stat({ label, value, emphasis }: { label: string; value: number | string; emphasis?: boolean }) {

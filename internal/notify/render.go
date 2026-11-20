@@ -6,7 +6,9 @@ import (
 	"bytes"
 	"fmt"
 	"html/template"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/undeluro/kardan-alerts/internal/alerting"
 )
@@ -98,3 +100,77 @@ var emailTemplate = template.Must(template.New("email").Parse(`<!doctype html>
 </table>{{end}}
 <p style="margin-top:20px"><a href="{{.Link}}" style="background:#111827;color:#fff;padding:10px 16px;border-radius:6px;text-decoration:none">Open alert</a></p>
 </td></tr></table></body></html>`))
+
+var sevPrefix = regexp.MustCompile(`^\[[A-Z]+\]\s*`)
+
+// RenderAllClear tells someone who was paged that the alert resolved itself.
+// subject is what they were originally sent (already masked for the channel).
+func (r Renderer) RenderAllClear(channel, alertID, subject, reason string) Message {
+	title := sevPrefix.ReplaceAllString(subject, "")
+	link := fmt.Sprintf("%s/alerts/%s", r.PublicURL, alertID)
+	switch channel {
+	case "email":
+		text := fmt.Sprintf("Resolved: %s\n\n%s\n\nNo action needed. Details: %s\n", title, reason, link)
+		var h bytes.Buffer
+		_ = allClearTemplate.Execute(&h, map[string]string{"Title": title, "Reason": reason, "Link": link})
+		return Message{Subject: "[RESOLVED] " + title, BodyText: text, BodyHTML: h.String()}
+	default: // sms (phone recipients get an SMS: nobody wants a call to say all is well)
+		text := "✅ RESOLVED: " + title
+		if len([]rune(text)) > 120 {
+			text = string([]rune(text)[:119]) + "…"
+		}
+		return Message{Subject: "[RESOLVED] " + title, BodyText: text + " (" + reason + ")"}
+	}
+}
+
+// RenderDigest summarises messages held by throttling.
+func (r Renderer) RenderDigest(channel string, subjects []string, window time.Duration) Message {
+	n := len(subjects)
+	head := fmt.Sprintf("%d more alerts in the last %s", n, humanDuration(window))
+	switch channel {
+	case "email":
+		var t strings.Builder
+		fmt.Fprintf(&t, "%s (held to avoid flooding you):\n\n", head)
+		for _, s := range subjects {
+			fmt.Fprintf(&t, "  • %s\n", sevPrefix.ReplaceAllString(s, ""))
+		}
+		fmt.Fprintf(&t, "\nOpen Kardan: %s\n", r.PublicURL)
+		return Message{Subject: "[Kardan digest] " + head, BodyText: t.String()}
+	default:
+		var b strings.Builder
+		b.WriteString("Kardan: " + head + ": ")
+		for i, s := range subjects {
+			s = sevPrefix.ReplaceAllString(s, "")
+			if b.Len()+len(s) > 260 {
+				fmt.Fprintf(&b, "… +%d", n-i)
+				break
+			}
+			if i > 0 {
+				b.WriteString("; ")
+			}
+			b.WriteString(s)
+		}
+		b.WriteString(" · " + r.PublicURL)
+		return Message{Subject: head, BodyText: b.String()}
+	}
+}
+
+var allClearTemplate = template.Must(template.New("clear").Parse(`<!doctype html>
+<html><body style="font-family:-apple-system,Segoe UI,Roboto,sans-serif;background:#f6f7f9;margin:0;padding:24px">
+<table role="presentation" width="100%" style="max-width:640px;margin:auto;background:#fff;border-radius:8px;overflow:hidden;border:1px solid #e5e7eb">
+<tr><td style="background:#16a34a;color:#fff;padding:12px 20px;font-size:13px;letter-spacing:.04em;text-transform:uppercase">Resolved</td></tr>
+<tr><td style="padding:20px"><h1 style="font-size:20px;margin:0 0 12px;color:#111827">{{.Title}}</h1>
+<p style="color:#374151">{{.Reason}}. No action needed.</p>
+<p><a href="{{.Link}}" style="color:#2563eb">View the alert</a></p></td></tr></table></body></html>`))
+
+// humanDuration renders 10m as "10 min" and 2h as "2 h".
+func humanDuration(d time.Duration) string {
+	switch {
+	case d >= time.Hour && d%time.Hour == 0:
+		return fmt.Sprintf("%d h", int(d/time.Hour))
+	case d >= time.Minute:
+		return fmt.Sprintf("%d min", int(d.Round(time.Minute)/time.Minute))
+	default:
+		return fmt.Sprintf("%d s", int(d.Round(time.Second)/time.Second))
+	}
+}

@@ -66,6 +66,9 @@ func scanStored(row pgx.Row) (*Stored, error) {
 		return nil, fmt.Errorf("decode stored rule: %w", err)
 	}
 	st.Rule.Match.Normalize()
+	if st.Rule.AutoResolve != nil {
+		st.Rule.AutoResolve.When.Normalize()
+	}
 	st.Rule.Origin = "api"
 	return &st, nil
 }

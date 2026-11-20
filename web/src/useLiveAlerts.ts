@@ -3,18 +3,33 @@ import { api, type Alert, type SchemaNotice, type Update } from "./api";
 
 export type Connection = "connecting" | "live" | "offline";
 export type StatusFilter = "active" | "resolved" | "";
+export type SortOrder = "recent" | "impact" | "money";
+
+export interface FeedOptions {
+  filter: StatusFilter;
+  sort: SortOrder;
+  incident: string;
+}
 
 const matchesFilter = (a: Alert, filter: StatusFilter) =>
   filter === "" || (filter === "active" ? a.status !== "resolved" : a.status === filter);
 
 const byLastSeen = (a: Alert, b: Alert) => b.lastSeen.localeCompare(a.lastSeen);
+const comparators: Record<SortOrder, (a: Alert, b: Alert) => number> = {
+  recent: byLastSeen,
+  impact: (a, b) => b.impact - a.impact || byLastSeen(a, b),
+  money: (a, b) => (b.notionalUsd ?? -1) - (a.notionalUsd ?? -1) || b.impact - a.impact || byLastSeen(a, b),
+};
 
 /**
  * Loads alerts over REST, then keeps them current with the server-sent event
  * stream (push, no page refresh). Every (re)connect re-syncs from REST, so a
  * dropped connection never leaves the feed stale.
  */
-export function useLiveAlerts(team: string, filter: StatusFilter, onSchema?: (s: SchemaNotice) => void) {
+export function useLiveAlerts(team: string, opts: FeedOptions, onSchema?: (s: SchemaNotice) => void) {
+  const { filter, sort, incident } = opts;
+  const cmp = comparators[sort];
+  const keep = useCallback((a: Alert) => matchesFilter(a, filter) && (!incident || a.incidentId === incident), [filter, incident]);
   const onSchemaRef = useRef(onSchema);
   onSchemaRef.current = onSchema;
   const [alerts, setAlerts] = useState<Alert[]>([]);
@@ -42,13 +57,13 @@ export function useLiveAlerts(team: string, filter: StatusFilter, onSchema?: (s:
 
   const reload = useCallback(async () => {
     try {
-      const list = await api.alerts(team, filter);
+      const list = await api.alerts(team, filter, sort, incident);
       setAlerts(list);
       setError(null);
     } catch (e) {
       setError((e as Error).message);
     }
-  }, [team, filter]);
+  }, [team, filter, sort, incident]);
 
   const apply = useCallback(
     (u: Update) => {
@@ -62,19 +77,19 @@ export function useLiveAlerts(team: string, filter: StatusFilter, onSchema?: (s:
           if (idx < 0) return prev;
           const next = [...prev];
           next[idx] = { ...next[idx], count: u.count ?? next[idx].count, lastSeen: u.lastSeen ?? next[idx].lastSeen };
-          return next.sort(byLastSeen);
+          return next.sort(cmp);
         }
         if (u.alert) {
           const rest = prev.filter((a) => a.id !== u.alert!.id);
-          if (!matchesFilter(u.alert, filter)) return rest;
-          return [u.alert, ...rest].sort(byLastSeen);
+          if (!keep(u.alert)) return rest;
+          return [u.alert, ...rest].sort(cmp);
         }
         return prev;
       });
       const id = u.alert?.id ?? u.id;
       if (id) markFlash(id);
     },
-    [filter, markFlash],
+    [keep, cmp, markFlash],
   );
 
   useEffect(() => {

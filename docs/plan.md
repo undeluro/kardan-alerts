@@ -305,6 +305,22 @@ kardan-alerts/
   the image sets for Kardan.
 - Masking: explicit path rules > detected finance kind > value patterns (IBAN, email).
 
+## Implementation notes (M5)
+
+- **Windows in the fingerprint:** a grouped rule's fingerprint includes the aligned window start, so every
+  replica agrees on "one alert per key per window"; closing is a SQL query on `window_end` (indexed) run by the
+  sweeper rather than a Redis sorted set.
+- **Sweeper:** one replica per tick via a short Redis lease, and every step is idempotent (conditional updates;
+  throttled messages are claimed with `FOR UPDATE SKIP LOCKED`), so overlapping sweeps cannot double-send.
+- **Throttling at enqueue:** Redis counters per person/channel/aligned window; held rows wait in the outbox and
+  are folded into one digest at the window end; it fails open if Redis is unavailable.
+- **Recovery events never count as occurrences:** rules with `autoResolve.when` check it before matching; the
+  recovery and firing events share a fingerprint.
+- **Incidents:** partial unique index on the key of open incidents; the alert transaction links new alerts;
+  incidents close when all their alerts are resolved or after the window.
+- **Impact:** severity base (60/45/25/10) + up to 40 points for money (6.5 x log10(1 + USD/1000)); incidents
+  add up to 15 for several correlated alerts. Cut-off urgency comes in M6.
+
 ## Milestones
 
 1. **Skeleton** — go.mod, compose (redpanda, postgres, redis, mailpit), role switch, migrations, React scaffold

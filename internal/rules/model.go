@@ -15,6 +15,8 @@ type Rule struct {
 	Routing      []Route      `yaml:"routing,omitempty" json:"routing,omitempty"`
 	Presentation Presentation `yaml:"presentation,omitempty" json:"presentation,omitempty"`
 	Dedup        Dedup        `yaml:"dedup,omitempty" json:"dedup,omitempty"`
+	Group        *Group       `yaml:"group,omitempty" json:"group,omitempty"`
+	AutoResolve  *AutoResolve `yaml:"autoResolve,omitempty" json:"autoResolve,omitempty"`
 	Runbooks     []string     `yaml:"runbooks,omitempty" json:"runbooks,omitempty"`
 
 	// Origin records where the rule came from ("file:<name>" or "api").
@@ -41,6 +43,9 @@ type Condition struct {
 // back into integers, so a rule round-tripped through the database renders
 // as 10000000 rather than 1e+07.
 func (c *Condition) Normalize() {
+	if c == nil {
+		return
+	}
 	c.Value = normalizeValue(c.Value)
 	for i := range c.All {
 		c.All[i].Normalize()
@@ -86,8 +91,26 @@ type Presentation struct {
 	Color    string   `yaml:"color,omitempty" json:"color,omitempty"`       // red|orange|amber|blue|green|gray, default by severity
 }
 
-// Dedup folds repeated matches into one alert with a counter.
+// Dedup folds repeated matches into one open alert with a counter.
 type Dedup struct {
 	Key    string `yaml:"key,omitempty" json:"key,omitempty"`       // template; default derived from type/service/error code
-	Window string `yaml:"window,omitempty" json:"window,omitempty"` // Go duration, default from DEDUP_WINDOW
+	Window string `yaml:"window,omitempty" json:"window,omitempty"` // reserved (use group.window / autoResolve.after)
+}
+
+// Group makes one alert per group key per time window ("one alert per
+// instrument every 5 minutes"). Notifications for the window go out as a
+// single digest when it closes, and the window's alert closes with it.
+type Group struct {
+	By     []string `yaml:"by" json:"by"`         // field paths or facets, e.g. [instrument]
+	Window string   `yaml:"window" json:"window"` // e.g. 5m
+}
+
+// AutoResolve closes alerts without a human:
+//
+//	when:  an event matching this condition (e.g. status = resolved) resolves
+//	       the open alert with the same fingerprint, and pages "all clear";
+//	after: an alert with no new matching event for this long resolves itself.
+type AutoResolve struct {
+	When  *Condition `yaml:"when,omitempty" json:"when,omitempty"`
+	After string     `yaml:"after,omitempty" json:"after,omitempty"`
 }

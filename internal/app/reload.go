@@ -16,6 +16,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/undeluro/kardan-alerts/internal/directory"
+	"github.com/undeluro/kardan-alerts/internal/finance"
 	"github.com/undeluro/kardan-alerts/internal/ingest"
 	"github.com/undeluro/kardan-alerts/internal/platform/bus"
 	"github.com/undeluro/kardan-alerts/internal/privacy"
@@ -41,6 +42,8 @@ type Reloader struct {
 
 	dir     atomic.Pointer[directory.Directory]
 	privacy atomic.Pointer[privacy.Policy]
+	fx      atomic.Pointer[finance.FX]
+	corr    atomic.Pointer[finance.Correlation]
 
 	mu        sync.Mutex
 	fileRules []rules.Rule
@@ -50,8 +53,43 @@ type Reloader struct {
 	filesHash string
 }
 
-func (r *Reloader) Directory() *directory.Directory { return r.dir.Load() }
-func (r *Reloader) Privacy() *privacy.Policy        { return r.privacy.Load() }
+func (r *Reloader) Directory() *directory.Directory   { return r.dir.Load() }
+func (r *Reloader) Privacy() *privacy.Policy          { return r.privacy.Load() }
+func (r *Reloader) FX() *finance.FX                   { return r.fx.Load() }
+func (r *Reloader) Correlation() *finance.Correlation { return r.corr.Load() }
+
+// loadMoney (re)loads FX rates and correlation settings, keeping the last
+// good version on error.
+func (r *Reloader) loadMoney(startup bool) error {
+	fx, err := finance.LoadFX(filepath.Join(r.ConfigDir, "fx.yaml"))
+	if err == nil {
+		r.fx.Store(fx)
+	}
+	r.noteErr("fx.yaml", err)
+	if err != nil && startup {
+		return fmt.Errorf("load fx: %w", err)
+	}
+	corr, err := finance.LoadCorrelation(filepath.Join(r.ConfigDir, "correlation.yaml"))
+	if err == nil {
+		r.corr.Store(corr)
+	}
+	r.noteErr("correlation.yaml", err)
+	if err != nil && startup {
+		return fmt.Errorf("load correlation: %w", err)
+	}
+	return nil
+}
+
+func (r *Reloader) noteErr(file string, err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err != nil {
+		r.errors[file] = err.Error()
+		r.Log.Error(file+" invalid, keeping previous version", "err", err)
+	} else {
+		delete(r.errors, file)
+	}
+}
 
 // Errors lists current configuration problems (bad YAML, invalid rules).
 func (r *Reloader) Errors() []string {
@@ -79,6 +117,9 @@ func (r *Reloader) LoadAll(ctx context.Context) error {
 		return fmt.Errorf("load classification: %w", err)
 	}
 	r.privacy.Store(pol)
+	if err := r.loadMoney(true); err != nil {
+		return err
+	}
 	r.loadFileRules()
 	if err := r.rebuildRules(ctx); err != nil {
 		return err
@@ -166,6 +207,7 @@ func (r *Reloader) reloadFiles(ctx context.Context) {
 		delete(r.errors, "classification.yaml")
 		r.mu.Unlock()
 	}
+	_ = r.loadMoney(false)
 	r.loadFileRules()
 	if err := r.rebuildRules(ctx); err != nil {
 		r.Log.Error("reload rules", "err", err)

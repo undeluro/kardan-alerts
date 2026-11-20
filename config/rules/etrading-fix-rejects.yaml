@@ -42,3 +42,5 @@ rules:
         - Rejected seq=RefSeqNum
     dedup:
       key: "{{SenderCompID}}|{{BusinessRejectReason}}{{SessionRejectReason}}"
+    autoResolve:
+      after: 1h          # session/business rejects that stop recurring clear themselves

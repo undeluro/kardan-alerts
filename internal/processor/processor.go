@@ -1,11 +1,13 @@
 // Package processor consumes events, evaluates rules, folds matches into
-// alerts and writes notifications to the outbox, all in one transaction per
-// batch.
+// alerts, links them into incidents and writes notifications to the outbox,
+// all in one transaction per batch. A sweeper closes windows, silent alerts
+// and incidents, and sends digests.
 package processor
 
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"sort"
 	"strconv"
@@ -20,6 +22,7 @@ import (
 	"github.com/undeluro/kardan-alerts/internal/alerting"
 	"github.com/undeluro/kardan-alerts/internal/directory"
 	"github.com/undeluro/kardan-alerts/internal/event"
+	"github.com/undeluro/kardan-alerts/internal/finance"
 	"github.com/undeluro/kardan-alerts/internal/notify"
 	"github.com/undeluro/kardan-alerts/internal/platform/clock"
 	"github.com/undeluro/kardan-alerts/internal/platform/metrics"
@@ -29,18 +32,21 @@ import (
 )
 
 type Processor struct {
-	Kafka     *kgo.Client // consumer-group client with auto-commit disabled
-	Pool      *pgxpool.Pool
-	Engine    *rules.Engine
-	Directory func() *directory.Directory
-	Privacy   func() *privacy.Policy
-	Clock     *clock.Clock      // business time for working hours and on-call
-	Fallbacks map[string]string // channel -> fallback channel, e.g. sms -> email
-	Renderer  notify.Renderer
-	Publisher *alerting.Publisher
-	Schemas   *schema.Registry
-	BatchSize int
-	Log       *slog.Logger
+	Kafka       *kgo.Client // consumer-group client with auto-commit disabled
+	Pool        *pgxpool.Pool
+	Engine      *rules.Engine
+	Directory   func() *directory.Directory
+	Privacy     func() *privacy.Policy
+	FX          func() *finance.FX
+	Correlation func() *finance.Correlation
+	Throttler   *notify.Throttler
+	Clock       *clock.Clock      // business time for working hours and on-call
+	Fallbacks   map[string]string // channel -> fallback channel, e.g. sms -> email
+	Renderer    notify.Renderer
+	Publisher   *alerting.Publisher
+	Schemas     *schema.Registry
+	BatchSize   int
+	Log         *slog.Logger
 }
 
 // Run polls batches until ctx ends. Offsets are committed only after the
@@ -106,12 +112,58 @@ type group struct {
 	lastAt   time.Time
 	lastID   string
 	recvAt   time.Time // earliest ingest time, for latency
+
+	notional  *float64 // USD
+	impact    int
+	winStart  *time.Time
+	winEnd    *time.Time
+	corrField string
+	corrValue string
+
+	kind   string // notification kind: alert (default) | digest
+	digest string // appended to titles of digest notifications
+}
+
+type recovery struct {
+	rule *rules.Compiled
+	at   time.Time
+}
+
+// newGroup prepares the alert for the first event of a fingerprint: UI
+// presentation (with sensitive-field flags), money at risk, impact, digest
+// window and incident key.
+func (p *Processor) newGroup(c *rules.Compiled, fp string, doc *schema.Doc, sig string, corr *finance.Correlation) *group {
+	env := doc.Env
+	kinds := p.Schemas.Kinds(sig)
+	classify := p.classifier(doc, kinds)
+	g := &group{rule: c, fp: fp, first: doc, kinds: kinds, firstAt: env.ReceivedAt, recvAt: env.ReceivedAt,
+		rendered: c.RenderWith(doc.Get, func(path string) bool { return classify(path) > privacy.Public })}
+	if usd := doc.Get("$notionalUsd"); usd.Exists() {
+		v := usd.Num
+		g.notional = &v
+	}
+	g.impact = finance.Impact(g.rendered.Severity, deref(g.notional), g.notional != nil)
+	if c.Grouped() {
+		s, e := c.WindowFor(env.ReceivedAt)
+		g.winStart, g.winEnd = &s, &e
+	}
+	g.corrField, g.corrValue = corr.Key(doc)
+	return g
+}
+
+func deref(f *float64) float64 {
+	if f == nil {
+		return 0
+	}
+	return *f
 }
 
 func (p *Processor) processBatch(ctx context.Context, recs []*kgo.Record) error {
 	start := time.Now()
 	rs := p.Engine.Current()
+	fx, corr := p.FX(), p.Correlation()
 	groups := map[string]*group{}
+	recoveries := map[string]recovery{}
 	observed := map[string]*schema.Observation{}
 
 	for _, rec := range recs {
@@ -122,6 +174,7 @@ func (p *Processor) processBatch(ctx context.Context, recs []*kgo.Record) error 
 		}
 		metrics.EventsProcessed.Inc()
 		doc := schema.NewDoc(env)
+		doc.FX = fx
 		sig, overrides, fields := p.Schemas.Identify(env.Payload)
 		doc.Overrides = overrides
 		o := observed[sig]
@@ -137,15 +190,26 @@ func (p *Processor) processBatch(ctx context.Context, recs []*kgo.Record) error 
 			o.LastSeen = env.ReceivedAt
 		}
 
+		// A recovery signal (e.g. Alertmanager status=resolved) closes the
+		// open alert instead of counting as another occurrence.
+		recovered := map[string]bool{}
+		for _, c := range rs.Recoveries(doc) {
+			recovered[c.Rule.ID] = true
+			fp := c.Fingerprint(doc)
+			if r, ok := recoveries[fp]; !ok || env.ReceivedAt.After(r.at) {
+				recoveries[fp] = recovery{rule: c, at: env.ReceivedAt}
+			}
+		}
+
 		for _, c := range rs.Match(doc) {
+			if recovered[c.Rule.ID] {
+				continue
+			}
 			metrics.RuleMatches.WithLabelValues(c.Rule.ID).Inc()
 			fp := c.Fingerprint(doc)
 			g := groups[fp]
 			if g == nil {
-				kinds := p.Schemas.Kinds(sig)
-				classify := p.classifier(doc, kinds)
-				g = &group{rule: c, fp: fp, first: doc, kinds: kinds, firstAt: env.ReceivedAt, recvAt: env.ReceivedAt,
-					rendered: c.RenderWith(doc.Get, func(path string) bool { return classify(path) > privacy.Public })}
+				g = p.newGroup(c, fp, doc, sig, corr)
 				groups[fp] = g
 			}
 			g.count++
@@ -155,9 +219,15 @@ func (p *Processor) processBatch(ctx context.Context, recs []*kgo.Record) error 
 			if env.ReceivedAt.Before(g.recvAt) {
 				g.recvAt = env.ReceivedAt
 			}
+			// A later occurrence may carry more money at risk.
+			if usd := doc.Get("$notionalUsd"); usd.Exists() && usd.Num > deref(g.notional) {
+				v := usd.Num
+				g.notional = &v
+				g.impact = max(g.impact, finance.Impact(g.rendered.Severity, v, true))
+			}
 		}
 	}
-	if len(groups) == 0 {
+	if len(groups) == 0 && len(recoveries) == 0 {
 		p.recordSchemas(ctx, observed)
 		metrics.ProcessBatchDuration.Observe(time.Since(start).Seconds())
 		return nil
@@ -169,6 +239,11 @@ func (p *Processor) processBatch(ctx context.Context, recs []*kgo.Record) error 
 		ordered = append(ordered, g)
 	}
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].fp < ordered[j].fp })
+	recFPs := make([]string, 0, len(recoveries))
+	for fp := range recoveries {
+		recFPs = append(recFPs, fp)
+	}
+	sort.Strings(recFPs)
 
 	inputs := make([]alerting.UpsertInput, len(ordered))
 	for i, g := range ordered {
@@ -192,33 +267,81 @@ func (p *Processor) processBatch(ctx context.Context, recs []*kgo.Record) error 
 			Count:        g.count,
 			FirstSeen:    g.firstAt,
 			LastSeen:     g.lastAt,
+			NotionalUSD:  g.notional,
+			Impact:       g.impact,
+			WindowStart:  g.winStart,
+			WindowEnd:    g.winEnd,
 		}}
 	}
 
 	var updates []alerting.Update
 	err := pgx.BeginFunc(ctx, p.Pool, func(tx pgx.Tx) error {
 		updates = updates[:0]
-		results, err := alerting.Upsert(ctx, tx, inputs)
-		if err != nil {
-			return err
-		}
 		var outbox []alerting.Notification
 		dir := p.Directory()
 		now := p.Clock.Now()
-		for i, res := range results {
-			g := ordered[i]
-			if !res.Inserted {
-				updates = append(updates, alerting.Update{Kind: "count", Team: g.rule.Rule.Team, ID: res.ID,
-					Count: res.Count, LastSeen: res.LastSeen, ReceivedAt: g.recvAt})
-				continue
+
+		if len(inputs) > 0 {
+			results, err := alerting.Upsert(ctx, tx, inputs)
+			if err != nil {
+				return err
 			}
-			a := inputs[i].Alert
-			a.ID, a.Count, a.LastSeen = res.ID, res.Count, res.LastSeen
-			a.CreatedAt, a.UpdatedAt = time.Now(), time.Now()
-			outbox = append(outbox, p.notificationsFor(&a, g, dir, now)...)
-			alertCopy := a
-			updates = append(updates, alerting.Update{Kind: "created", Team: a.Team, Alert: &alertCopy,
-				ReceivedAt: g.recvAt})
+			var links []alerting.IncidentInput
+			created := map[string]*alerting.Alert{}
+			var createdOrder []string
+			for i, res := range results {
+				g := ordered[i]
+				if !res.Inserted {
+					updates = append(updates, alerting.Update{Kind: "count", Team: g.rule.Rule.Team, ID: res.ID,
+						Count: res.Count, LastSeen: res.LastSeen, ReceivedAt: g.recvAt})
+					continue
+				}
+				a := inputs[i].Alert
+				a.ID, a.Count, a.LastSeen = res.ID, res.Count, res.LastSeen
+				a.CreatedAt, a.UpdatedAt = time.Now(), time.Now()
+				if g.corrField != "" {
+					links = append(links, alerting.IncidentInput{NewID: event.NewID(), AlertID: a.ID, KeyField: g.corrField,
+						KeyValue: g.corrValue, Team: a.Team, Severity: a.Severity, NotionalUSD: deref(a.NotionalUSD),
+						Impact: a.Impact, At: a.FirstSeen})
+				}
+				// Windowed alerts notify once, as a digest, when the window closes.
+				if !g.rule.Grouped() {
+					outbox = append(outbox, p.notificationsFor(ctx, &a, g, dir, now)...)
+				}
+				ac := a
+				created[a.ID] = &ac
+				createdOrder = append(createdOrder, a.ID)
+			}
+			incidents, err := alerting.LinkIncidents(ctx, tx, links)
+			if err != nil {
+				return err
+			}
+			for _, id := range createdOrder {
+				a := created[id]
+				if inc, ok := incidents[id]; ok {
+					a.IncidentID = &inc
+				}
+				updates = append(updates, alerting.Update{Kind: "created", Team: a.Team, Alert: a,
+					ReceivedAt: groups[a.Fingerprint].recvAt})
+			}
+		}
+
+		for _, fp := range recFPs {
+			a, err := alerting.ResolveFingerprint(ctx, tx, fp, "auto: recovery event received")
+			if alerting.IsNotFound(err) {
+				continue // nothing open: recovery for an alert we never opened
+			}
+			if err != nil {
+				return err
+			}
+			clear, err := p.allClear(ctx, tx, a, "the source reported recovery")
+			if err != nil {
+				return err
+			}
+			outbox = append(outbox, clear...)
+			metrics.AlertsAutoResolved.WithLabelValues("recovery").Inc()
+			a.Sample, a.SampleRaw = nil, ""
+			updates = append(updates, alerting.Update{Kind: "status", Team: a.Team, Alert: a})
 		}
 		return alerting.InsertNotifications(ctx, tx, outbox)
 	})
@@ -227,9 +350,10 @@ func (p *Processor) processBatch(ctx context.Context, recs []*kgo.Record) error 
 	}
 
 	for _, u := range updates {
-		if u.Kind == "created" {
+		switch u.Kind {
+		case "created":
 			metrics.AlertsCreated.WithLabelValues(u.Team).Inc()
-		} else {
+		case "count":
 			metrics.AlertsDeduplicated.Inc()
 		}
 	}
@@ -239,6 +363,35 @@ func (p *Processor) processBatch(ctx context.Context, recs []*kgo.Record) error 
 	p.recordSchemas(ctx, observed)
 	metrics.ProcessBatchDuration.Observe(time.Since(start).Seconds())
 	return nil
+}
+
+// allClear tells everyone who was paged by SMS, phone or email that the
+// alert resolved itself. Phone recipients get an SMS: nobody wants a call to
+// say all is well. Texts reuse what each person was sent, so masking holds.
+func (p *Processor) allClear(ctx context.Context, q alerting.Querier, a *alerting.Alert, reason string) ([]alerting.Notification, error) {
+	paged, err := alerting.PagedFor(ctx, q, a.ID)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var out []alerting.Notification
+	for _, pg := range paged {
+		ch := pg.Channel
+		if ch == "phone" {
+			ch = "sms"
+		}
+		if seen[pg.Recipient+"|"+ch] {
+			continue
+		}
+		seen[pg.Recipient+"|"+ch] = true
+		msg := p.Renderer.RenderAllClear(ch, a.ID, pg.Subject, reason)
+		out = append(out, alerting.Notification{
+			ID: event.NewID(), AlertID: a.ID, Recipient: pg.Recipient, Channel: ch, Address: pg.Address,
+			Subject: msg.Subject, BodyText: msg.BodyText, BodyHTML: msg.BodyHTML, EventReceivedAt: time.Now(),
+			Kind: "resolved", Reason: "all clear: " + reason,
+		})
+	}
+	return out, nil
 }
 
 // recordSchemas updates the schema catalogue. It is metadata, so failures are
@@ -295,11 +448,12 @@ type delivery struct {
 //   - channels: explicit, or "preferences" (severity + working hours of each
 //     recipient, in their time zone);
 //   - each message is rendered with the masking its channel requires;
+//   - per-person throttling holds messages over the limit for a digest;
 //   - a fallback channel is rendered too and parked as standby, so if the
 //     primary channel fails the dispatcher can switch without re-rendering.
 //
 // "ui" needs no row: the live feed shows every alert.
-func (p *Processor) notificationsFor(a *alerting.Alert, g *group, dir *directory.Directory, now time.Time) []alerting.Notification {
+func (p *Processor) notificationsFor(ctx context.Context, a *alerting.Alert, g *group, dir *directory.Directory, now time.Time) []alerting.Notification {
 	var plan []delivery
 	seen := map[string]bool{}
 	add := func(d delivery) {
@@ -347,12 +501,19 @@ func (p *Processor) notificationsFor(a *alerting.Alert, g *group, dir *directory
 			pres := g.rule.RenderWith(get, nil)
 			cp := *a
 			cp.Title, cp.Body, cp.Fields = pres.Title, pres.Body, pres.Fields
+			if g.digest != "" {
+				cp.Title += " — " + g.digest
+			}
 			ma = &cp
 			masked[lvl] = ma
 		}
 		return p.Renderer.Render(channel, ma)
 	}
 
+	kind := g.kind
+	if kind == "" {
+		kind = "alert"
+	}
 	var out []alerting.Notification
 	for _, d := range plan {
 		addr := d.person.Address(d.channel)
@@ -364,7 +525,14 @@ func (p *Processor) notificationsFor(a *alerting.Alert, g *group, dir *directory
 		primary := alerting.Notification{
 			ID: event.NewID(), AlertID: a.ID, Recipient: d.person.ID, Channel: d.channel, Address: addr,
 			Subject: msg.Subject, BodyText: msg.BodyText, BodyHTML: msg.BodyHTML, EventReceivedAt: g.recvAt,
-			Reason: d.reason,
+			Reason: d.reason, Kind: kind,
+		}
+		if held, until := p.Throttler.Check(ctx, d.person.ID, d.channel, a.Severity, time.Now()); held {
+			primary.Status, primary.NextAttemptAt = "held", until
+			primary.Reason = join(d.reason, "held by throttling, included in a digest at "+until.Format("15:04 MST"))
+			metrics.NotificationsHeld.WithLabelValues(d.channel).Inc()
+			out = append(out, primary)
+			continue
 		}
 		out = append(out, primary)
 
@@ -377,7 +545,7 @@ func (p *Processor) notificationsFor(a *alerting.Alert, g *group, dir *directory
 			out = append(out, alerting.Notification{
 				ID: event.NewID(), AlertID: a.ID, Recipient: d.person.ID, Channel: fb, Address: fbAddr,
 				Subject: fm.Subject, BodyText: fm.BodyText, BodyHTML: fm.BodyHTML, EventReceivedAt: g.recvAt,
-				Status: "standby", FallbackFor: primary.ID, Reason: "fallback if " + d.channel + " fails",
+				Status: "standby", FallbackFor: primary.ID, Reason: "fallback if " + d.channel + " fails", Kind: kind,
 			})
 		}
 	}
@@ -408,4 +576,15 @@ func join(a, b string) string {
 		return a
 	}
 	return a + "; " + b
+}
+
+func windowLabel(start, end *time.Time) string {
+	if start == nil || end == nil {
+		return ""
+	}
+	layout := "15:04"
+	if start.Second() != 0 || end.Second() != 0 {
+		layout = "15:04:05"
+	}
+	return fmt.Sprintf("%s–%s UTC", start.UTC().Format(layout), end.UTC().Format(layout))
 }

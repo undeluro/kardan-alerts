@@ -9,6 +9,7 @@ package schema
 
 import (
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/tidwall/gjson"
@@ -38,13 +39,20 @@ var facetCandidates = map[string][]string{
 	"$account":      {"account", "iban", "debtorIban", "Account"},
 }
 
+// Converter turns an amount in some currency into USD (see finance.FX).
+type Converter interface {
+	ToUSD(amount float64, ccy string) (float64, bool)
+}
+
 // Doc is one event as seen by the rule engine.
 type Doc struct {
 	Env *event.Envelope
 	// Overrides maps facets to paths for this event's schema (auto-detected
 	// or set by a person); they take precedence over the generic candidates.
 	Overrides map[string]string
-	facets    map[string]gjson.Result
+	// FX enables the $notionalUsd facet.
+	FX     Converter
+	facets map[string]gjson.Result
 }
 
 func NewDoc(env *event.Envelope) *Doc { return &Doc{Env: env} }
@@ -69,6 +77,8 @@ func (d *Doc) facet(name string) gjson.Result {
 		r = str(d.Env.ID)
 	case "$receivedAt":
 		r = str(d.Env.ReceivedAt.UTC().Format(time.RFC3339Nano))
+	case "$notionalUsd":
+		r = d.notionalUSD()
 	case "$raw":
 		r = str(d.Env.Raw)
 	case "$format":
@@ -93,6 +103,45 @@ func (d *Doc) facet(name string) gjson.Result {
 	return r
 }
 
+// notionalUSD converts $notional from $currency (USD when no currency is
+// given) using the FX table.
+func (d *Doc) notionalUSD() gjson.Result {
+	n := d.Get("$notional")
+	var amount float64
+	switch n.Type {
+	case gjson.Number:
+		amount = n.Num
+	case gjson.String:
+		f, err := strconv.ParseFloat(strings.TrimSpace(n.Str), 64)
+		if err != nil {
+			return gjson.Result{}
+		}
+		amount = f
+	default:
+		return gjson.Result{}
+	}
+	ccy := d.Get("$currency").String()
+	if ccy == "" {
+		ccy = "USD"
+	}
+	if d.FX == nil {
+		if strings.EqualFold(ccy, "USD") {
+			return num(amount)
+		}
+		return gjson.Result{}
+	}
+	usd, ok := d.FX.ToUSD(amount, ccy)
+	if !ok {
+		return gjson.Result{}
+	}
+	return num(usd)
+}
+
+func num(f float64) gjson.Result {
+	raw := strconv.FormatFloat(f, 'f', -1, 64)
+	return gjson.Result{Type: gjson.Number, Num: f, Raw: raw}
+}
+
 func (d *Doc) firstScalar(paths []string) gjson.Result {
 	for _, p := range paths {
 		r := gjson.GetBytes(d.Env.Payload, p)
@@ -114,7 +163,7 @@ func str(s string) gjson.Result {
 // FacetNames lists the canonical facets rules may reference.
 func FacetNames() []string {
 	return []string{"$severity", "$service", "$type", "$env", "$instrument", "$counterparty", "$currency",
-		"$notional", "$tradeId", "$desk", "$account", "$source", "$format", "$raw", "$id", "$receivedAt"}
+		"$notional", "$notionalUsd", "$tradeId", "$desk", "$account", "$source", "$format", "$raw", "$id", "$receivedAt"}
 }
 
 // IsFacet reports whether name is a known canonical facet.

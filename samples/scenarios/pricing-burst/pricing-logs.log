@@ -1,0 +1,9 @@
+2026-11-20T09:41:01Z WARN [pricing-engine-2] instrument=EURUSD latencyMs=1200 quote latency above threshold
+2026-11-20T09:42:02Z WARN [pricing-engine-3] instrument=EURUSD latencyMs=1300 quote latency above threshold
+2026-11-20T09:43:03Z WARN [pricing-engine-1] instrument=EURUSD latencyMs=1400 quote latency above threshold
+2026-11-20T09:44:04Z WARN [pricing-engine-2] instrument=EURUSD latencyMs=1500 quote latency above threshold
+2026-11-20T09:45:05Z WARN [pricing-engine-3] instrument=EURUSD latencyMs=1600 quote latency above threshold
+2026-11-20T09:46:06Z WARN [pricing-engine-1] instrument=EURUSD latencyMs=1700 quote latency above threshold
+2026-11-20T09:47:07Z WARN [pricing-engine-2] instrument=EURUSD latencyMs=1800 quote latency above threshold
+2026-11-20T09:48:08Z WARN [pricing-engine-3] instrument=EURUSD latencyMs=1900 quote latency above threshold
+2026-11-20T09:49:01Z ERROR [pricing-engine-1] instrument=GBPUSD latencyMs=2400 stale quote served

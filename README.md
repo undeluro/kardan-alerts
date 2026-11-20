@@ -4,9 +4,10 @@
 prefer, without flooding them, for trading, settlement and payments operations. It accepts events of *any* shape
 from any source, and teams decide what reaches them with rules they edit as data, not code.
 
-> Hackathon 2026 — *Flexible Alerting & Notification Service*. Status: **Milestones 1–4 done** (end-to-end
+> Hackathon 2026 — *Flexible Alerting & Notification Service*. Status: **Milestones 1–5 done** (end-to-end
 > slice; Kafka, log-file, FIX and ISO 20022 sources; schema registry with finance field detection; live rule
-> editing; reliable delivery with on-call, preferences, masking, circuit breakers and fallbacks). See [Roadmap](#roadmap) for what is next.
+> editing; reliable delivery with on-call, preferences, masking, circuit breakers and fallbacks; money-at-risk
+> ranking, incident correlation, grouping windows, throttling and auto-resolve). See [Roadmap](#roadmap) for what is next.
 
 ## Quick start
 
@@ -18,7 +19,13 @@ docker compose up --build          # first build takes ~2 minutes
 ```
 
 `send` pushes samples through every source type: HTTP webhooks (Alertmanager JSON, ISO 20022 XML), Kafka topics
-and tailed log files (regex-parsed pricing logs, a FIX engine log).
+and tailed log files (regex-parsed pricing logs, a FIX engine log). Then play the scenarios:
+
+```sh
+./samples/scenario.sh counterparty-outage   # settlement, trade and FIX events for one counterparty -> one incident
+./samples/scenario.sh pricing-burst         # many pricing warnings -> one alert per instrument per 5-minute window
+./samples/scenario.sh recovery              # Alertmanager "resolved" -> alert closes, "all clear" to whoever was paged
+```
 
 | What                     | Where                                                         |
 |--------------------------|---------------------------------------------------------------|
@@ -99,6 +106,22 @@ Scale the workers horizontally: `docker compose up -d --scale worker=3`.
   - Permanent errors (bad number) go straight to dead letters, which can be re-sent from the Deliveries page.
   - Tested: provider down → fallback email in 3 s → breakers open → provider back → probe, close, backlog
     delivered, nothing lost.
+- **Ranked by money at risk.**
+  - Amounts are normalised to USD (`$notionalUsd` facet, rates in `config/fx.yaml`, hot-reloaded).
+  - Every alert gets an impact score (0–100): severity plus money on a log scale. The feed sorts by impact,
+    money at risk or recency.
+- **Incidents, not alert storms.**
+  - Alerts that share a counterparty, an instrument or a service within 15 minutes fold into one incident, across
+    teams and sources (`config/correlation.yaml`).
+  - The counterparty scenario becomes one incident: "ACME-CAPITAL — 4 alerts, settlements + rates + e-trading,
+    $413.6M at risk".
+- **Less noise.**
+  - `group: {by: [instrument], window: 5m}` gives "one alert per instrument every 5 minutes", with one digest per
+    window.
+  - Per-person throttling (e.g. 5 SMS per 10 min, critical exempt) holds the excess and sends one summary.
+  - `autoResolve` closes alerts when the source reports recovery (Alertmanager `status: resolved`) or after a
+    quiet period, and sends "all clear" to whoever was paged.
+  - All of this is driven by a sweeper that is safe to run on every replica.
 - **Live UI.** A server-sent-events feed per team (push, no refresh), ack/resolve, and a detail drawer with each
   delivery's channel, recipient, reason, fallbacks and the raw payload. The Deliveries page shows channel health
   and breaker state, the Teams page shows on-call now. In demo mode a shared business clock lets you jump to
@@ -149,6 +172,9 @@ presentation:
   title: "Rejected {{payload.currency}} {{payload.notional | number}} — {{payload.reason}}"
   fields: [Trade=payload.tradeId, Desk=payload.desk]
 dedup: { key: "{{payload.tradeId}}" }
+# optional:
+# group:       { by: [instrument], window: 5m }      # one alert per instrument per window, digest at close
+# autoResolve: { when: { field: status, op: eq, value: resolved }, after: 2h }
 ```
 
 Create or change rules without touching files (YAML or JSON bodies), or dry-run one first:
@@ -166,7 +192,9 @@ Template filters: `number`, `upper`, `lower`, `default "x"`, `truncate N`, `json
 |---|---|---|
 | POST | `/ingest/{source}` | one event (JSON, or text treated as a log line) |
 | POST | `/ingest/{source}/batch` | JSON array or newline-delimited events |
-| GET | `/api/alerts?team=&status=active\|resolved` | list |
+| GET | `/api/alerts?team=&status=active\|resolved&sort=impact\|money\|recent&incident=` | list |
+| GET | `/api/incidents?status=open` · `/api/incidents/{id}` | correlated incidents with totals · incident + alerts |
+| GET | `/api/fx` | FX rates used for money at risk |
 | GET | `/api/alerts/{id}` | alert + deliveries |
 | POST | `/api/alerts/{id}/ack` · `/resolve` | body `{"by": "name"}` |
 | GET | `/api/stream?team=` | server-sent events |
@@ -211,7 +239,7 @@ Configuration is through environment variables with working defaults; see `inter
    reload~~ ✔
 4. ~~Fake SMS/phone gateway; preferences with working hours and follow-the-sun on-call; masking per channel;
    circuit breakers~~ ✔
-5. Grouping digests, throttling, auto-resolve, FX-normalised dollar impact, incident correlation
+5. ~~Grouping digests, throttling, auto-resolve, FX-normalised dollar impact, incident correlation~~ ✔
 6. `aggregate` and `absence` rules, market calendars and cut-off countdowns
 7. Runbooks (YAML / Markdown / free text) with actions, four-eyes approvals and a hash-chained audit trail
 8. Rule builder with dry-run on recent events, onboarding wizard

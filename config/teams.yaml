@@ -10,6 +10,15 @@ defaultPreferences:
   - { severity: warning,  channels: [email] }
   - { severity: info,     channels: [ui] }
 
+# Per person, per channel. Messages over the limit are held and summarised in
+# one digest when the window ends; critical alerts always go through.
+throttle:
+  exempt: [critical]
+  channels:
+    sms:   { max: 5,  per: 10m }
+    phone: { max: 3,  per: 10m }
+    email: { max: 20, per: 10m }
+
 people:
   - id: anna
     name: Anna Kowalska

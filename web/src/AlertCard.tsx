@@ -1,8 +1,10 @@
-import type { Alert } from "./api";
-import { Badge, Button, formatCount, statusBadge, timeAgo, toneFor } from "./ui";
+import type { Alert, Incident } from "./api";
+import { Badge, Button, formatCount, formatUSD, statusBadge, timeAgo, toneFor } from "./ui";
 
 interface Props {
   alert: Alert;
+  incident?: Incident;
+  onIncident?: (id: string) => void;
   flash: boolean;
   now: number;
   busy: boolean;
@@ -11,7 +13,10 @@ interface Props {
   onResolve: () => void;
 }
 
-export function AlertCard({ alert: a, flash, now, busy, onOpen, onAck, onResolve }: Props) {
+const hhmm = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+export function AlertCard({ alert: a, incident, onIncident, flash, now, busy, onOpen, onAck, onResolve }: Props) {
+  const windowLabel = a.windowStart && a.windowEnd ? `${hhmm(a.windowStart)}–${hhmm(a.windowEnd)} window` : null;
   const t = toneFor(a.color);
   const resolved = a.status === "resolved";
   return (
@@ -31,6 +36,29 @@ export function AlertCard({ alert: a, flash, now, busy, onOpen, onAck, onResolve
               <Badge className="bg-gray-900 text-white ring-gray-900 dark:bg-white dark:text-gray-900 dark:ring-white">
                 ×{formatCount(a.count)}
               </Badge>
+            )}
+            {a.notionalUsd != null && a.notionalUsd > 0 && (
+              <Badge className="bg-emerald-50 text-emerald-800 ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-400/30">
+                {formatUSD(a.notionalUsd)} at risk
+              </Badge>
+            )}
+            {windowLabel && (
+              <Badge className="bg-sky-50 text-sky-700 ring-sky-600/20 dark:bg-sky-500/10 dark:text-sky-300 dark:ring-sky-400/30">
+                {windowLabel}
+              </Badge>
+            )}
+            {incident && incident.alertCount > 1 && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onIncident?.(incident.id);
+                }}
+                className="inline-flex items-center gap-1 rounded-md bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-900 ring-1 ring-amber-600/20 ring-inset hover:bg-amber-100 dark:bg-amber-500/10 dark:text-amber-200 dark:ring-amber-400/30"
+                title="Alerts sharing this key are grouped into one incident"
+              >
+                ⛓ {incident.keyValue} · {incident.alertCount}
+              </button>
             )}
             <span className="text-xs text-gray-500 dark:text-gray-400">
               {a.team} · {a.sourceId} · {timeAgo(a.lastSeen, now)}
@@ -59,6 +87,10 @@ export function AlertCard({ alert: a, flash, now, busy, onOpen, onAck, onResolve
               ))}
             </dl>
           )}
+        </div>
+        <div className="hidden shrink-0 flex-col items-center sm:flex" title="Impact: severity, money at risk and urgency combined (0-100)">
+          <span className="text-lg leading-none font-semibold tabular-nums">{a.impact}</span>
+          <span className="text-[10px] tracking-wide text-gray-500 uppercase">impact</span>
         </div>
         {!resolved && (
           <div className="flex shrink-0 gap-2">

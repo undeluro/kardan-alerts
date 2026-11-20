@@ -1,6 +1,7 @@
 package processor
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -108,7 +109,7 @@ func TestRoutingMaskingAndFallbacks(t *testing.T) {
 
 	// Week 2 of the rotation -> Maria is on call; 09:00 London -> Anna gets SMS.
 	now := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
-	ns := index(p.notificationsFor(alertFor(g), g, dir, now))
+	ns := index(p.notificationsFor(context.Background(), alertFor(g), g, dir, now))
 
 	for _, key := range []string{"maria|phone", "maria|sms", "anna|sms"} {
 		if n, ok := ns[key]; !ok || n.Status != "" {
@@ -148,7 +149,7 @@ func TestRoutingMaskingAndFallbacks(t *testing.T) {
 	}
 
 	// 21:00 London -> Anna's preference switches to email (primary, not standby).
-	late := index(p.notificationsFor(alertFor(g), g, dir, time.Date(2026, 11, 10, 21, 0, 0, 0, time.UTC)))
+	late := index(p.notificationsFor(context.Background(), alertFor(g), g, dir, time.Date(2026, 11, 10, 21, 0, 0, 0, time.UTC)))
 	if n, ok := late["anna|email"]; !ok || n.Status != "" {
 		t.Errorf("after 20:00 Anna should get email as primary: %+v", n)
 	}

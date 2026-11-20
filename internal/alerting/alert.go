@@ -35,6 +35,11 @@ type Alert struct {
 	SampleRaw    string                `json:"sampleRaw,omitempty"`    // first event as received, for non-JSON formats
 	SampleFormat string                `json:"sampleFormat,omitempty"` // json | fix | iso20022 | ...
 	Count        int64                 `json:"count"`
+	NotionalUSD  *float64              `json:"notionalUsd,omitempty"` // money at risk, FX-normalised
+	Impact       int                   `json:"impact"`                // 0-100 ranking score
+	IncidentID   *string               `json:"incidentId,omitempty"`
+	WindowStart  *time.Time            `json:"windowStart,omitempty"` // grouped alerts: digest window
+	WindowEnd    *time.Time            `json:"windowEnd,omitempty"`
 	FirstSeen    time.Time             `json:"firstSeen"`
 	LastSeen     time.Time             `json:"lastSeen"`
 	AckedBy      *string               `json:"ackedBy,omitempty"`
@@ -95,6 +100,7 @@ type Notification struct {
 	BodyText        string     `json:"bodyText"`
 	BodyHTML        string     `json:"-"`
 	Status          string     `json:"status"`
+	Kind            string     `json:"kind,omitempty"` // alert | digest | resolved
 	Attempts        int        `json:"attempts"`
 	NextAttemptAt   time.Time  `json:"nextAttemptAt"`
 	LastError       string     `json:"lastError,omitempty"`

@@ -32,6 +32,17 @@ func (rs *RuleSet) Match(d *schema.Doc) []*Compiled {
 	return out
 }
 
+// Recoveries returns the rules for which the event is a recovery signal.
+func (rs *RuleSet) Recoveries(d *schema.Doc) []*Compiled {
+	var out []*Compiled
+	for _, c := range rs.Rules {
+		if c.Rule.IsEnabled() && c.IsRecovery(d) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // ByID finds a compiled rule.
 func (rs *RuleSet) ByID(id string) *Compiled {
 	for _, c := range rs.Rules {

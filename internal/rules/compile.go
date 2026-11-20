@@ -37,6 +37,11 @@ type Compiled struct {
 	dedupKey *tmpl.Template
 	Fields   []Field
 	Window   time.Duration
+
+	groupBy      []string
+	groupWindow  time.Duration
+	recovery     predicate     // autoResolve.when
+	ResolveAfter time.Duration // autoResolve.after (0 = never)
 }
 
 var defaultTitle = tmpl.MustCompile("{{$type | default \"event\"}} from {{$service | default \"unknown service\"}}")
@@ -86,6 +91,36 @@ func Compile(r Rule, defaultWindow time.Duration) (*Compiled, error) {
 	}
 	for _, p := range r.Presentation.Fields {
 		c.Fields = append(c.Fields, parseField(p))
+	}
+	if g := r.Group; g != nil {
+		if len(g.By) == 0 {
+			return nil, wrap(fmt.Errorf("group.by needs at least one field"))
+		}
+		w, err := time.ParseDuration(g.Window)
+		if err != nil || w < time.Second || w > 24*time.Hour {
+			return nil, wrap(fmt.Errorf("group.window %q must be a duration between 1s and 24h, like 5m", g.Window))
+		}
+		c.groupBy, c.groupWindow = g.By, w
+	}
+	if ar := r.AutoResolve; ar != nil {
+		if ar.When == nil && ar.After == "" {
+			return nil, wrap(fmt.Errorf("autoResolve needs when (a recovery condition) and/or after (a duration)"))
+		}
+		if ar.When != nil {
+			if c.groupWindow > 0 {
+				return nil, wrap(fmt.Errorf("autoResolve.when cannot be combined with group: windowed alerts close on their own"))
+			}
+			if c.recovery, err = compileCond(*ar.When, "autoResolve.when"); err != nil {
+				return nil, wrap(err)
+			}
+		}
+		if ar.After != "" {
+			d, err := time.ParseDuration(ar.After)
+			if err != nil || d < time.Second {
+				return nil, wrap(fmt.Errorf("autoResolve.after %q must be a positive duration like 30m", ar.After))
+			}
+			c.ResolveAfter = d
+		}
 	}
 	for i, rt := range r.Routing {
 		if !strings.HasPrefix(rt.To, "team:") && !strings.HasPrefix(rt.To, "user:") && !strings.HasPrefix(rt.To, "oncall:") {
@@ -224,6 +259,15 @@ func (c *Compiled) Fingerprint(d *schema.Doc) string {
 	h := sha256.New()
 	h.Write([]byte(c.Rule.ID))
 	h.Write([]byte{0})
+	if c.groupWindow > 0 {
+		for _, p := range c.groupBy {
+			h.Write([]byte(d.Get(p).String()))
+			h.Write([]byte{0})
+		}
+		start, _ := c.WindowFor(d.Env.ReceivedAt)
+		h.Write([]byte(start.UTC().Format(time.RFC3339)))
+		return hex.EncodeToString(h.Sum(nil))[:32]
+	}
 	if c.dedupKey != nil {
 		h.Write([]byte(c.dedupKey.Render(d.Get)))
 	} else {
@@ -234,6 +278,24 @@ func (c *Compiled) Fingerprint(d *schema.Doc) string {
 	}
 	return hex.EncodeToString(h.Sum(nil))[:32]
 }
+
+// Grouped reports whether the rule makes windowed digest alerts.
+func (c *Compiled) Grouped() bool { return c.groupWindow > 0 }
+
+// WindowFor returns the tumbling window containing t (aligned to the window
+// size, so every replica computes the same boundaries).
+func (c *Compiled) WindowFor(t time.Time) (start, end time.Time) {
+	if c.groupWindow <= 0 {
+		return time.Time{}, time.Time{}
+	}
+	start = t.UTC().Truncate(c.groupWindow)
+	return start, start.Add(c.groupWindow)
+}
+
+// IsRecovery reports whether the event is a recovery signal for this rule
+// (autoResolve.when): it resolves the open alert with the same fingerprint
+// instead of counting as an occurrence.
+func (c *Compiled) IsRecovery(d *schema.Doc) bool { return c.recovery != nil && c.recovery(d) }
 
 // ---- condition compiler ----------------------------------------------------
 

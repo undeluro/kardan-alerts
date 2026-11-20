@@ -1,5 +1,7 @@
 # Team Pricing: log lines from pricing-engine-* at WARN or above -> UI only;
-# one alert per instrument (5-minute digests arrive with grouping in M5).
+# group them into one alert per instrument every 5 minutes. Each window's
+# alert closes itself when the window ends (with a digest if the rule had
+# external channels).
 id: pricing-engine-warnings
 name: Pricing engine warnings
 team: pricing
@@ -15,6 +17,6 @@ presentation:
     - Instrument=instrument
     - Instance=$service
     - Latency ms=latencyMs
-dedup:
-  key: "{{instrument | default \"unknown\"}}"
+group:
+  by: [instrument]
   window: 5m

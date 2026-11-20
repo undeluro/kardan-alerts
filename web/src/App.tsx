@@ -10,7 +10,7 @@ import { SchemasPage } from "./pages/SchemasPage";
 import { SourcesPage } from "./pages/SourcesPage";
 import { Link, navigate, useLocation } from "./router";
 import { FinanceChip } from "./ui";
-import { useLiveAlerts, type Connection, type StatusFilter } from "./useLiveAlerts";
+import { useLiveAlerts, type Connection, type SortOrder, type StatusFilter } from "./useLiveAlerts";
 
 const store = {
   get: (k: string, d: string) => {
@@ -42,6 +42,16 @@ export default function App() {
   const { path } = useLocation();
   const [team, setTeam] = useState(() => store.get("kardan.team", ""));
   const [filter, setFilter] = useState<StatusFilter>("active");
+  const [sort, setSort] = useState<SortOrder>(() => (store.get("kardan.sort", "impact") as SortOrder) || "impact");
+  // ?incident=<id> deep-links straight to one incident's alerts.
+  const [incident, setIncidentState] = useState(() => new URLSearchParams(window.location.search).get("incident") ?? "");
+  const setIncident = useCallback((id: string) => {
+    setIncidentState(id);
+    const url = new URL(window.location.href);
+    if (id) url.searchParams.set("incident", id);
+    else url.searchParams.delete("incident");
+    window.history.replaceState(null, "", url);
+  }, []);
   const [actor, setActor] = useState(() => store.get("kardan.actor", ""));
   const [teams, setTeams] = useState<Team[]>([]);
   const [now, setNow] = useState(Date.now());
@@ -64,7 +74,7 @@ export default function App() {
 
   // The live feed stays connected on every page, so alert counts and
   // "new schema" notices arrive wherever the user is.
-  const { alerts, connection, error, flash, replace } = useLiveAlerts(team, filter, onSchema);
+  const { alerts, connection, error, flash, replace } = useLiveAlerts(team, { filter, sort, incident }, onSchema);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -76,6 +86,7 @@ export default function App() {
   }, []);
   useEffect(() => store.set("kardan.team", team), [team]);
   useEffect(() => store.set("kardan.actor", actor), [actor]);
+  useEffect(() => store.set("kardan.sort", sort), [sort]);
   useEffect(() => {
     const t = window.setInterval(() => setNow(Date.now()), 10_000);
     return () => window.clearInterval(t);
@@ -117,6 +128,10 @@ export default function App() {
         team={team}
         filter={filter}
         setFilter={setFilter}
+        sort={sort}
+        setSort={setSort}
+        incident={incident}
+        setIncident={setIncident}
         actor={actor}
         now={now}
         openId={alertId}

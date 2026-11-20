@@ -68,6 +68,21 @@ var (
 		Buckets: latencyBuckets,
 	}, []string{"channel"})
 
+	AlertsAutoResolved = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "kardan_alerts_auto_resolved_total",
+		Help: "Alerts closed without a human, by reason (recovery, silence, window).",
+	}, []string{"reason"})
+
+	NotificationsHeld = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "kardan_notifications_held_total",
+		Help: "Notifications held by per-recipient throttling, by channel.",
+	}, []string{"channel"})
+
+	DigestsSent = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "kardan_digests_total",
+		Help: "Digest notifications created, by kind (window, throttle).",
+	}, []string{"kind"})
+
 	ChannelState = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "kardan_channel_breaker_state",
 		Help: "Circuit breaker state per channel on this replica: 0 closed, 1 half-open, 2 open.",

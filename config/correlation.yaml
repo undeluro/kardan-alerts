@@ -1,0 +1,10 @@
+# Alerts that share a business key within the window fold into one incident,
+# across teams and sources ("Counterparty ACME: settlement failures, trade
+# rejections and FIX rejects — $410M at risk"). The first key present on an
+# alert decides its incident. Keys are field paths or facets.
+window: 15m
+keys:
+  - $counterparty   # a counterparty outage hitting settlements, trading and payments
+  - $instrument     # pricing latency and order rejects on the same instrument
+  - $service        # several alerts from the same service
+minAlerts: 2        # shown as an incident from this many alerts

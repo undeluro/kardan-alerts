@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, type Alert, type Notification } from "./api";
-import { Badge, Button, statusBadge, timeAgo, toneFor } from "./ui";
+import { Badge, Button, KindBadge, statusBadge, timeAgo, toneFor } from "./ui";
 
 interface Props {
   id: string;
@@ -104,6 +104,7 @@ export function AlertDrawer({ id, live, now, onClose, onAck, onResolve }: Props)
                       {n.lastError && n.status !== "sent" && <div className="mt-0.5 truncate text-xs text-red-600 dark:text-red-400">{n.lastError}</div>}
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
+                      <KindBadge kind={n.kind} />
                       {n.attempts > 1 && <span className="text-xs text-gray-500">{n.attempts} attempts</span>}
                       <Badge className={statusBadge[n.status] ?? statusBadge.pending}>{n.status === "standby" ? "fallback (not needed yet)" : n.status}</Badge>
                     </div>

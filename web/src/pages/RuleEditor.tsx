@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { api, ApiError, type Info, type RuleDetail, type Team, type TestResult } from "../api";
 import { navigate, Link } from "../router";
-import { Badge, Button, Card, Notice, toneFor } from "../ui";
+import { Badge, Button, Card, Notice, formatUSD, toneFor } from "../ui";
 import { OriginBadge } from "./RulesPage";
 
 export const DRAFT_KEY = "kardan.ruleDraft";
@@ -261,6 +261,24 @@ function TestPanel({
             <Badge className="bg-gray-100 text-gray-600 ring-gray-300 dark:bg-gray-800 dark:text-gray-300">does not match</Badge>
           ))}
         {test.format && <span className="text-xs text-gray-500">parsed as {test.format}</span>}
+        {hasSample && test.matches && test.impact != null && (
+          <span className="ml-auto text-xs text-gray-600 dark:text-gray-300">
+            impact <b>{test.impact}</b>
+            {test.notionalUsd != null && <> · {formatUSD(test.notionalUsd)} at risk</>}
+            {test.incidentKey && (
+              <>
+                {" "}
+                · incident key <code className="font-mono">{test.incidentKey}</code>
+              </>
+            )}
+            {test.window && (
+              <>
+                {" "}
+                · window {new Date(test.window.start).toLocaleTimeString()}–{new Date(test.window.end).toLocaleTimeString()}
+              </>
+            )}
+          </span>
+        )}
         {testing && <span className="ml-auto text-xs text-gray-400">checking…</span>}
       </div>
 

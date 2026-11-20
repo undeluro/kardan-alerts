@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type ChannelView, type Delivery, type Info } from "../api";
 import { Link } from "../router";
-import { Badge, Button, Card, Notice, PageHeader, statusBadge, timeAgo, toneFor } from "../ui";
+import { Badge, Button, Card, KindBadge, Notice, PageHeader, statusBadge, timeAgo, toneFor } from "../ui";
 
 const channelIcon: Record<string, string> = { email: "✉", sms: "💬", phone: "📞" };
 
@@ -144,6 +144,7 @@ export function DeliveriesPage({ now, onToast }: { now: number; onToast: (m: str
                 <span className="font-medium">{d.recipient}</span>
                 <span className="font-mono text-xs text-gray-500">{d.address}</span>
                 <Badge className={statusBadge[d.status] ?? statusBadge.pending}>{d.status}</Badge>
+                <KindBadge kind={d.kind} />
                 {d.fallbackFor && <Badge className="bg-violet-50 text-violet-700 ring-violet-600/20 dark:bg-violet-500/10 dark:text-violet-300">fallback</Badge>}
                 {d.attempts > 1 && <span className="text-xs text-gray-500">{d.attempts} attempts</span>}
               </div>

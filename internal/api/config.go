@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/undeluro/kardan-alerts/internal/event"
+	"github.com/undeluro/kardan-alerts/internal/finance"
 	"github.com/undeluro/kardan-alerts/internal/rules"
 	"github.com/undeluro/kardan-alerts/internal/schema"
 )
@@ -48,6 +49,9 @@ func decodeRule(r *http.Request) (rules.Rule, error) {
 		return rules.Rule{}, fmt.Errorf("JSON: %w", err)
 	}
 	rule.Match.Normalize()
+	if rule.AutoResolve != nil {
+		rule.AutoResolve.When.Normalize()
+	}
 	return rule, nil
 }
 
@@ -236,6 +240,9 @@ func (s *Server) testRule(w http.ResponseWriter, r *http.Request) {
 	}
 	env := envelopeFromRaw(s, src, raw)
 	doc := schema.NewDoc(env)
+	if s.FX != nil {
+		doc.FX = s.FX()
+	}
 	if s.Schemas != nil {
 		_, doc.Overrides, _ = s.Schemas.Identify(env.Payload)
 	}
@@ -255,6 +262,20 @@ func (s *Server) testRule(w http.ResponseWriter, r *http.Request) {
 	rendered := c.Render(doc)
 	resp["alert"] = rendered
 	resp["fingerprint"] = c.Fingerprint(doc)
+	usd := doc.Get("$notionalUsd")
+	if usd.Exists() {
+		resp["notionalUsd"] = usd.Num
+	}
+	resp["impact"] = finance.Impact(rendered.Severity, usd.Num, usd.Exists())
+	if s.Correlation != nil {
+		if f, v := s.Correlation().Key(doc); f != "" {
+			resp["incidentKey"] = f + "=" + v
+		}
+	}
+	if c.Grouped() {
+		ws, we := c.WindowFor(env.ReceivedAt)
+		resp["window"] = map[string]time.Time{"start": ws, "end": we}
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -291,6 +312,9 @@ func (s *Server) schemaDetail(sc *schema.Schema) schemaDetail {
 	doc := schema.NewDoc(&event.Envelope{Payload: sc.Sample, SourceID: firstOr(sc.Sources, ""), Format: sc.Format,
 		Raw: sc.SampleRaw})
 	doc.Overrides = facets
+	if s.FX != nil {
+		doc.FX = s.FX()
+	}
 	values := map[string]any{}
 	for _, f := range schema.FacetNames() {
 		switch f {

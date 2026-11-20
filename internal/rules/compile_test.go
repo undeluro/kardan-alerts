@@ -247,3 +247,54 @@ func TestHumanizeLabels(t *testing.T) {
 		}
 	}
 }
+
+func TestGroupWindows(t *testing.T) {
+	c := mustCompile(t, Rule{Match: leaf("level", "exists", true), Group: &Group{By: []string{"instrument"}, Window: "5m"}})
+	if !c.Grouped() {
+		t.Fatal("rule should be grouped")
+	}
+	at := func(ts, instr string) *schema.Doc {
+		tm, _ := time.Parse(time.RFC3339, ts)
+		return schema.NewDoc(&event.Envelope{ReceivedAt: tm, Payload: json.RawMessage(`{"level":"WARN","instrument":"` + instr + `"}`)})
+	}
+	a := c.Fingerprint(at("2026-11-20T09:15:01Z", "EURUSD"))
+	b := c.Fingerprint(at("2026-11-20T09:19:59Z", "EURUSD"))
+	other := c.Fingerprint(at("2026-11-20T09:16:00Z", "US10Y"))
+	next := c.Fingerprint(at("2026-11-20T09:20:00Z", "EURUSD"))
+	if a != b || a == other || a == next {
+		t.Errorf("same instrument in one window must share a fingerprint; other instruments and windows must not")
+	}
+	s, e := c.WindowFor(time.Date(2026, 11, 20, 9, 17, 30, 0, time.UTC))
+	if s.Format("15:04") != "09:15" || e.Format("15:04") != "09:20" {
+		t.Errorf("window = %s-%s", s, e)
+	}
+}
+
+func TestAutoResolveRecovery(t *testing.T) {
+	c := mustCompile(t, Rule{
+		Match:       leaf("alertname", "exists", true),
+		AutoResolve: &AutoResolve{When: &Condition{Field: "status", Op: "eq", Value: "resolved"}, After: "30m"},
+	})
+	firing := doc(t, metricBreach)
+	resolved := doc(t, strings.Replace(metricBreach, `"firing"`, `"resolved"`, 1))
+	if c.IsRecovery(firing) || !c.IsRecovery(resolved) {
+		t.Error("recovery condition")
+	}
+	if c.Fingerprint(firing) != c.Fingerprint(resolved) {
+		t.Error("a recovery event must have the firing alert's fingerprint")
+	}
+	if c.ResolveAfter != 30*time.Minute {
+		t.Errorf("after = %v", c.ResolveAfter)
+	}
+	for _, bad := range []Rule{
+		{ID: "a", Team: "t", Match: leaf("x", "exists", true), AutoResolve: &AutoResolve{}},
+		{ID: "a", Team: "t", Match: leaf("x", "exists", true), AutoResolve: &AutoResolve{After: "soon"}},
+		{ID: "a", Team: "t", Match: leaf("x", "exists", true), Group: &Group{By: []string{"x"}, Window: "5m"},
+			AutoResolve: &AutoResolve{When: &Condition{Field: "s", Op: "eq", Value: "ok"}}},
+		{ID: "a", Team: "t", Match: leaf("x", "exists", true), Group: &Group{Window: "5m"}},
+	} {
+		if _, err := Compile(bad, time.Minute); err == nil {
+			t.Errorf("expected error for %+v", bad)
+		}
+	}
+}

@@ -16,6 +16,7 @@ import (
 	"github.com/undeluro/kardan-alerts/internal/alerting"
 	"github.com/undeluro/kardan-alerts/internal/directory"
 	"github.com/undeluro/kardan-alerts/internal/event"
+	"github.com/undeluro/kardan-alerts/internal/finance"
 	"github.com/undeluro/kardan-alerts/internal/ingest"
 	"github.com/undeluro/kardan-alerts/internal/platform/clock"
 	"github.com/undeluro/kardan-alerts/internal/rules"
@@ -37,6 +38,8 @@ type Server struct {
 	Clock         *clock.Clock
 	GatewayToken  string
 	ChannelStates func(r *http.Request) map[string]string // breaker state per channel
+	FX            func() *finance.FX
+	Correlation   func() *finance.Correlation
 	Hub           *Hub
 	UI            fs.FS // built React app; nil when not embedded
 	Log           *slog.Logger
@@ -61,6 +64,9 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/schemas/{id}", s.getSchema)
 	mux.HandleFunc("PUT /api/schemas/{id}", s.updateSchema)
 	mux.HandleFunc("GET /api/sources", s.listSources)
+	mux.HandleFunc("GET /api/incidents", s.listIncidents)
+	mux.HandleFunc("GET /api/incidents/{id}", s.getIncident)
+	mux.HandleFunc("GET /api/fx", s.getFX)
 	mux.HandleFunc("GET /api/deliveries", s.listDeliveries)
 	mux.HandleFunc("POST /api/notifications/{id}/resend", s.resend)
 	mux.HandleFunc("GET /api/channels", s.channels)
@@ -92,7 +98,8 @@ func (s *Server) info(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) listAlerts(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	limit, _ := strconv.Atoi(q.Get("limit"))
-	alerts, err := s.Store.List(r.Context(), alerting.ListFilter{Team: q.Get("team"), Status: q.Get("status"), Limit: limit})
+	alerts, err := s.Store.List(r.Context(), alerting.ListFilter{Team: q.Get("team"), Status: q.Get("status"),
+		Incident: q.Get("incident"), Sort: q.Get("sort"), Limit: limit})
 	if err != nil {
 		s.fail(w, err)
 		return

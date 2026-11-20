@@ -35,6 +35,7 @@ type Directory struct {
 	People   []Person     `yaml:"people" json:"people"`
 	Teams    []Team       `yaml:"teams" json:"teams"`
 	Defaults []Preference `yaml:"defaultPreferences,omitempty" json:"defaultPreferences,omitempty"`
+	Throttle Throttle     `yaml:"throttle,omitempty" json:"throttle,omitempty"`
 
 	people   map[string]Person
 	teams    map[string]*Team
@@ -110,7 +111,7 @@ func (d *Directory) index() error {
 	if d.defaults, err = compilePreferences(defaults, "defaultPreferences"); err != nil {
 		return err
 	}
-	return nil
+	return d.Throttle.compile()
 }
 
 // Resolve expands a routing target into people:

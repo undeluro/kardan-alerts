@@ -24,6 +24,11 @@ export interface Alert {
   sampleRaw?: string;
   sampleFormat?: string;
   count: number;
+  notionalUsd?: number;
+  impact: number;
+  incidentId?: string;
+  windowStart?: string;
+  windowEnd?: string;
   firstSeen: string;
   lastSeen: string;
   ackedBy?: string;
@@ -44,7 +49,8 @@ export interface Notification {
   address: string;
   subject: string;
   bodyText: string;
-  status: "pending" | "sending" | "sent" | "retry" | "dead" | "standby" | "cancelled";
+  status: "pending" | "sending" | "sent" | "retry" | "dead" | "standby" | "cancelled" | "held" | "suppressed";
+  kind?: "alert" | "digest" | "resolved";
   attempts: number;
   nextAttemptAt: string;
   lastError?: string;
@@ -85,6 +91,23 @@ export interface OnCallConfig {
   rotation?: { every: string; start: string; people: string[] };
   shifts?: { person: string; between?: string; days?: string; timezone?: string }[];
   overrides?: { person: string; from: string; to: string }[];
+}
+
+export interface Incident {
+  id: string;
+  key: string;
+  keyField: string;
+  keyValue: string;
+  status: "open" | "resolved";
+  alertCount: number;
+  openAlerts: number;
+  teams: string[];
+  maxSeverity: string;
+  notionalUsd: number;
+  impact: number;
+  firstSeen: string;
+  lastSeen: string;
+  resolvedAt?: string;
 }
 
 export interface Team {
@@ -181,6 +204,10 @@ export interface TestResult {
   payload?: unknown;
   alert?: { title: string; body: string; severity: string; color: string; fields: AlertField[] | null };
   fingerprint?: string;
+  notionalUsd?: number;
+  impact?: number;
+  incidentKey?: string;
+  window?: { start: string; end: string };
 }
 
 export interface FieldInfo {
@@ -287,7 +314,9 @@ const qs = (params: Record<string, string>) => {
 
 export const api = {
   info: () => request<Info>("GET", "/api/info"),
-  alerts: (team: string, status: string) => request<Alert[]>("GET", `/api/alerts${qs({ team, status })}`),
+  alerts: (team: string, status: string, sort = "", incident = "") =>
+    request<Alert[]>("GET", `/api/alerts${qs({ team, status, sort, incident })}`),
+  incidents: (status = "open") => request<Incident[]>("GET", `/api/incidents${qs({ status })}`),
   alert: (id: string) => request<{ alert: Alert; notifications: Notification[] }>("GET", `/api/alerts/${id}`),
   ack: (id: string, by: string) => request<Alert>("POST", `/api/alerts/${id}/ack`, { by }),
   resolve: (id: string, by: string) => request<Alert>("POST", `/api/alerts/${id}/resolve`, { by }),

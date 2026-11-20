@@ -10,13 +10,13 @@ import (
 )
 
 const notificationCols = `n.id, n.alert_id, coalesce(n.fallback_for, ''), n.reason, n.recipient, n.channel,
-	n.address, n.subject, n.body_text, n.status, n.attempts, n.next_attempt_at, n.last_error,
+	n.address, n.subject, n.body_text, n.status, n.kind, n.attempts, n.next_attempt_at, n.last_error,
 	n.event_received_at, n.created_at, n.sent_at`
 
 func scanNotification(row pgx.Row, extra ...any) (Notification, error) {
 	var n Notification
 	dest := []any{&n.ID, &n.AlertID, &n.FallbackFor, &n.Reason, &n.Recipient, &n.Channel, &n.Address, &n.Subject,
-		&n.BodyText, &n.Status, &n.Attempts, &n.NextAttemptAt, &n.LastError, &n.EventReceivedAt, &n.CreatedAt,
+		&n.BodyText, &n.Status, &n.Kind, &n.Attempts, &n.NextAttemptAt, &n.LastError, &n.EventReceivedAt, &n.CreatedAt,
 		&n.SentAt}
 	err := row.Scan(append(dest, extra...)...)
 	return n, err
