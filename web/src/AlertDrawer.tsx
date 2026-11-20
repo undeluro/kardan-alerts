@@ -1,136 +1,201 @@
+import * as Dialog from "@radix-ui/react-dialog";
+import { Code2, LockKeyhole, Mail, MessageSquare, Phone, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, type Alert, type Notification } from "./api";
-import { Badge, Button, statusBadge, timeAgo, toneFor } from "./ui";
+import { Badge, Button, Notice, alertStatusLabel, statusBadge, timeAgo, toneFor } from "./ui";
 
 interface Props {
   id: string;
-  live?: Alert; // latest version from the feed, so counts update while open
+  live?: Alert;
   now: number;
   onClose: () => void;
-  onAck: () => void;
-  onResolve: () => void;
+  onAction: (alert: Alert, action: "ack" | "resolve") => Promise<Alert>;
 }
 
-const channelIcon: Record<string, string> = { email: "✉", sms: "💬", phone: "📞", ui: "🖥" };
+const channelIcons = { email: Mail, sms: MessageSquare, phone: Phone };
+const deliveryLabels: Record<Notification["status"], string> = {
+  pending: "Pending", sending: "Sending", sent: "Sent", retry: "Retrying",
+  dead: "Failed", standby: "Fallback on standby", cancelled: "Cancelled",
+};
 
-export function AlertDrawer({ id, live, now, onClose, onAck, onResolve }: Props) {
+function latestAlert(...candidates: (Alert | undefined)[]) {
+  let latest: Alert | undefined;
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    if (!latest || Date.parse(candidate.updatedAt) >= Date.parse(latest.updatedAt)) latest = candidate;
+  }
+  return latest;
+}
+
+export function AlertDrawer({ id, live, now, onClose, onAction }: Props) {
   const [detail, setDetail] = useState<{ alert: Alert; notifications: Notification[] } | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [acted, setActed] = useState<Alert>();
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<"ack" | "resolve" | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    const load = () =>
-      api
-        .alert(id)
-        .then((d) => !cancelled && setDetail(d))
-        .catch((e: Error) => !cancelled && setError(e.message));
+    let timer: number;
+    const load = async () => {
+      try {
+        const result = await api.alert(id);
+        if (!cancelled) {
+          setDetail(result);
+          setLoadError(null);
+        }
+      } catch (error) {
+        if (!cancelled) setLoadError((error as Error).message);
+      } finally {
+        if (!cancelled) timer = window.setTimeout(load, 3000);
+      }
+    };
     void load();
-    const timer = window.setInterval(load, 3000); // delivery status changes without a push event
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
     };
   }, [id]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  const current = latestAlert(detail?.alert, live, acted);
+  // A streaming count update does not change the alert's status timestamp.
+  const alert = current && live ? {
+    ...current,
+    count: Math.max(current.count, live.count),
+    lastSeen: Date.parse(live.lastSeen) >= Date.parse(current.lastSeen) ? live.lastSeen : current.lastSeen,
+  } : current;
+  const sample = detail?.alert ?? alert;
 
-  const a = live
-    ? { ...detail?.alert, ...live, sample: detail?.alert.sample, sampleRaw: detail?.alert.sampleRaw, sampleFormat: detail?.alert.sampleFormat }
-    : detail?.alert;
+  const perform = async (action: "ack" | "resolve") => {
+    if (!alert || busy) return;
+    setBusy(action);
+    setActionError(null);
+    try {
+      setActed(await onAction(alert, action));
+    } catch (error) {
+      setActionError((error as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
 
   return (
-    <div className="fixed inset-0 z-40 flex justify-end" role="dialog" aria-modal="true">
-      <div className="absolute inset-0 bg-gray-900/30 backdrop-blur-[1px]" onClick={onClose} />
-      <aside className="relative flex h-full w-full max-w-xl flex-col overflow-y-auto bg-white shadow-2xl dark:bg-gray-950">
-        {!a ? (
-          <div className="p-6 text-sm text-gray-500">{error ?? "Loading…"}</div>
-        ) : (
-          <>
-            <header className={`border-b border-gray-200 p-5 dark:border-gray-800`}>
-              <div className="flex items-start justify-between gap-4">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Badge className={toneFor(a.color).badge}>{a.severity}</Badge>
-                  <Badge className={statusBadge[a.status]}>{a.status}</Badge>
-                  <span className="text-xs text-gray-500">rule {a.ruleId}</span>
-                </div>
-                <button onClick={onClose} className="rounded p-1 text-gray-400 hover:text-gray-700 dark:hover:text-gray-200" aria-label="Close">
-                  ✕
-                </button>
+    <Dialog.Root open onOpenChange={(open) => { if (!open) onClose(); }}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-40 bg-[#091526]/55" />
+        <Dialog.Content
+          className="fixed inset-y-0 right-0 z-50 flex w-full max-w-xl flex-col overflow-hidden border-l border-[var(--console-line)] bg-[var(--console-surface)] text-[var(--console-ink)] shadow-2xl"
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            const trigger = document.querySelector<HTMLElement>(`[data-alert-link="${CSS.escape(id)}"]`);
+            (trigger ?? document.getElementById("alert-queue-title"))?.focus({ preventScroll: true });
+          }}
+        >
+          <header className="shrink-0 px-4 pt-4 sm:px-5 sm:pt-5">
+            <div className="flex min-h-9 items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {alert && <>
+                  <Badge className={`${toneFor(alert.color).badge} capitalize`}>{alert.severity}</Badge>
+                  <Badge className={statusBadge[alert.status]}>{alertStatusLabel[alert.status]}</Badge>
+                </>}
               </div>
-              <h2 className="mt-2 text-lg font-semibold text-gray-900 dark:text-gray-50">{a.title}</h2>
-              {a.body && <p className="mt-1 whitespace-pre-wrap text-sm text-gray-600 dark:text-gray-300">{a.body}</p>}
-              {a.status !== "resolved" && (
-                <div className="mt-4 flex gap-2">
-                  {a.status === "open" && <Button onClick={onAck}>Acknowledge</Button>}
-                  <Button onClick={onResolve} variant="primary">
-                    Resolve
-                  </Button>
-                </div>
-              )}
-            </header>
+              <Dialog.Close asChild>
+                <button type="button" aria-label="Close alert details" className="console-muted grid size-9 shrink-0 place-items-center rounded-md hover:bg-[var(--console-canvas)]">
+                  <X size={19} aria-hidden="true" />
+                </button>
+              </Dialog.Close>
+            </div>
+          </header>
 
-            <section className="grid grid-cols-2 gap-x-6 gap-y-3 border-b border-gray-200 p-5 text-sm dark:border-gray-800">
-              <Info label="Occurrences" value={a.count.toLocaleString()} />
-              <Info label="Team" value={a.team} />
-              <Info label="First seen" value={`${new Date(a.firstSeen).toLocaleString()} (${timeAgo(a.firstSeen, now)})`} />
-              <Info label="Last seen" value={`${new Date(a.lastSeen).toLocaleString()} (${timeAgo(a.lastSeen, now)})`} />
-              <Info label="Source" value={a.sourceId} />
-              {a.ackedBy && <Info label="Acknowledged by" value={a.ackedBy} />}
-              {a.resolvedBy && <Info label="Resolved by" value={a.resolvedBy} />}
-              {(a.fields ?? []).map((f) => (
-                <Info key={f.label} label={f.label} value={f.value} mono sensitive={f.sensitive} />
-              ))}
-            </section>
-
-            <section className="border-b border-gray-200 p-5 dark:border-gray-800">
-              <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Deliveries</h3>
-              {detail && detail.notifications.length === 0 && (
-                <p className="mt-2 text-sm text-gray-500">Shown in the live feed only (no external channels on this rule).</p>
-              )}
-              <ul className="mt-2 divide-y divide-gray-100 dark:divide-gray-800">
-                {detail?.notifications.map((n) => (
-                  <li key={n.id} className={`flex items-start justify-between gap-3 py-2 text-sm ${n.fallbackFor ? "pl-5" : ""}`}>
-                    <div className="min-w-0">
-                      <div className="text-gray-900 dark:text-gray-100">
-                        {n.fallbackFor && <span className="mr-1 text-gray-400">↳</span>}
-                        <span className="mr-1.5">{channelIcon[n.channel] ?? "•"}</span>
-                        {n.channel} → {n.recipient} <span className="text-gray-500">({n.address})</span>
-                      </div>
-                      {n.reason && <div className="mt-0.5 text-xs text-gray-500">{n.reason}</div>}
-                      {n.lastError && n.status !== "sent" && <div className="mt-0.5 truncate text-xs text-red-600 dark:text-red-400">{n.lastError}</div>}
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      {n.attempts > 1 && <span className="text-xs text-gray-500">{n.attempts} attempts</span>}
-                      <Badge className={statusBadge[n.status] ?? statusBadge.pending}>{n.status === "standby" ? "fallback (not needed yet)" : n.status}</Badge>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            </section>
-
-            {a.sampleRaw && (
-              <section className="px-5 pt-5">
-                <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">First event as received ({a.sampleFormat})</h3>
-                <pre className="mt-2 overflow-x-auto rounded-md bg-gray-50 p-3 font-mono text-xs whitespace-pre-wrap break-all text-gray-800 ring-1 ring-gray-200 dark:bg-gray-900 dark:text-gray-200 dark:ring-gray-800">
-                  {a.sampleRaw}
-                </pre>
-              </section>
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+            <div className="border-b border-[var(--console-line)] px-4 pt-2 pb-4 sm:px-5 sm:pb-5">
+              <Dialog.Title className="text-xl font-semibold tracking-tight break-words">{alert?.title || "Alert details"}</Dialog.Title>
+              <Dialog.Description className="console-muted mt-1 text-sm whitespace-pre-wrap break-words">
+                {alert?.body || "Review the alert, its event, and notification deliveries."}
+              </Dialog.Description>
+            </div>
+            {loadError && <div className="p-4"><Notice tone="error">Could not refresh alert details. {loadError}</Notice></div>}
+            {!alert && !loadError && <p role="status" className="console-muted p-5 text-sm">Loading alert…</p>}
+            {alert && (
+              <>
+                <section className="border-b border-[var(--console-line)] p-4 sm:p-5" aria-labelledby="alert-details-heading">
+                  <h3 id="alert-details-heading" className="mb-3 text-sm font-semibold">Event details</h3>
+                  <dl className="grid grid-cols-2 gap-x-5 gap-y-3 text-sm">
+                    <Info label="Occurrences" value={alert.count.toLocaleString()} />
+                    <Info label="Team" value={alert.team} />
+                    <Info label="First seen" value={new Date(alert.firstSeen).toLocaleString()} />
+                    <Info label="Last seen" value={`${new Date(alert.lastSeen).toLocaleString()} (${timeAgo(alert.lastSeen, now)})`} />
+                    <Info label="Source" value={alert.sourceId} mono />
+                    <Info label="Rule" value={alert.ruleId} mono />
+                    {alert.ackedBy && <Info label="Acknowledged by" value={alert.ackedBy} />}
+                    {alert.resolvedBy && <Info label="Resolved by" value={alert.resolvedBy} />}
+                    {(alert.fields ?? []).map((field) => <Info key={field.label} label={field.label} value={field.value} mono sensitive={field.sensitive} />)}
+                  </dl>
+                </section>
+                <section className="border-b border-[var(--console-line)] p-4 sm:p-5" aria-labelledby="alert-delivery-heading">
+                  <h3 id="alert-delivery-heading" className="text-sm font-semibold">Notification deliveries</h3>
+                  {detail?.notifications.length === 0 && <p className="console-muted mt-2 text-sm">No external notifications recorded.</p>}
+                  {!detail && !loadError && <p role="status" className="console-muted mt-2 text-sm">Loading deliveries…</p>}
+                  <ul className="mt-1 divide-y divide-[var(--console-line)]">
+                    {detail?.notifications.map((notification) => <Delivery key={notification.id} notification={notification} />)}
+                  </ul>
+                </section>
+                {(sample?.sampleRaw || sample?.sample !== undefined) && (
+                  <details className="group p-4 sm:p-5">
+                    <summary className="cursor-pointer rounded text-sm font-semibold">
+                      <Code2 size={16} className="console-muted mx-1 inline-block" aria-hidden="true" /> First event payload
+                    </summary>
+                    {sample.sampleRaw && <Payload label={`Original · ${sample.sampleFormat || "text"}`} value={sample.sampleRaw} />}
+                    {sample.sample !== undefined && <Payload label="Parsed data" value={JSON.stringify(sample.sample, null, 2)} />}
+                  </details>
+                )}
+              </>
             )}
-            {a.sample !== undefined && (
-              <section className="p-5">
-                <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">{a.sampleRaw ? "Parsed payload" : "First event payload"}</h3>
-                <pre className="mt-2 overflow-x-auto rounded-md bg-gray-50 p-3 font-mono text-xs text-gray-800 ring-1 ring-gray-200 dark:bg-gray-900 dark:text-gray-200 dark:ring-gray-800">
-                  {JSON.stringify(a.sample, null, 2)}
-                </pre>
-              </section>
-            )}
-          </>
-        )}
-      </aside>
+          </div>
+
+          {alert && alert.status !== "resolved" && (
+            <footer className="space-y-2 border-t border-[var(--console-line)] p-4 sm:p-5">
+              {actionError && <div role="alert"><Notice tone="error">{actionError}</Notice></div>}
+              <div className="flex flex-wrap justify-end gap-2">
+                {alert.status === "open" && <Button variant="primary" disabled={busy !== null} onClick={() => void perform("ack")}>{busy === "ack" ? "Acknowledging…" : "Acknowledge"}</Button>}
+                <Button variant={alert.status === "acked" ? "primary" : "secondary"} disabled={busy !== null} onClick={() => void perform("resolve")}>{busy === "resolve" ? "Resolving…" : "Resolve alert"}</Button>
+              </div>
+            </footer>
+          )}
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+function Delivery({ notification: n }: { notification: Notification }) {
+  const Icon = channelIcons[n.channel as keyof typeof channelIcons] ?? Mail;
+  return (
+    <li className={`flex flex-wrap items-start justify-between gap-2 py-2.5 text-sm ${n.fallbackFor ? "pl-4" : ""}`}>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-start gap-2 break-words">
+          <Icon size={16} className="console-muted mt-0.5 shrink-0" aria-hidden="true" />
+          <div className="min-w-0">
+            <span className="font-medium capitalize">{n.channel === "sms" ? "SMS" : n.channel}</span> · {n.recipient}
+            {n.address && <div className="console-muted break-all text-xs">{n.address}</div>}
+          </div>
+        </div>
+        {n.reason && <div className="console-muted mt-1 text-xs">{n.reason}</div>}
+        {n.lastError && n.status !== "sent" && <div className="mt-1 text-xs break-words text-red-700 dark:text-red-300">{n.lastError}</div>}
+      </div>
+      <div className="flex items-center gap-2">
+        {n.attempts > 1 && <span className="console-muted text-xs">{n.attempts} attempts</span>}
+        <Badge className={statusBadge[n.status] ?? statusBadge.pending}>{deliveryLabels[n.status] ?? n.status}</Badge>
+      </div>
+    </li>
+  );
+}
+
+function Payload({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="mt-3">
+      <h4 className="console-muted text-xs font-medium">{label}</h4>
+      <pre className="mt-1.5 max-h-72 overflow-auto rounded-md bg-[var(--console-canvas)] p-3 font-mono text-xs">{value}</pre>
     </div>
   );
 }
@@ -138,13 +203,10 @@ export function AlertDrawer({ id, live, now, onClose, onAck, onResolve }: Props)
 function Info({ label, value, mono, sensitive }: { label: string; value: string; mono?: boolean; sensitive?: boolean }) {
   return (
     <div className="min-w-0">
-      <div className="text-xs text-gray-500 dark:text-gray-400">
-        {sensitive && <span title="Sensitive: masked on SMS, calls and email">🔒 </span>}
-        {label}
-      </div>
-      <div className={`truncate text-gray-900 dark:text-gray-100 ${mono ? "font-mono text-xs" : ""}`} title={value}>
-        {value}
-      </div>
+      <dt className="console-muted flex items-center gap-1 text-xs">
+        {sensitive && <LockKeyhole size={12} aria-label="Sensitive field" />}{label}
+      </dt>
+      <dd className={`mt-0.5 break-words ${mono ? "font-mono text-xs" : ""}`}>{value}</dd>
     </div>
   );
 }

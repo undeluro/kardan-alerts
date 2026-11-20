@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { ArrowLeft, FlaskConical } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, type Info, type RuleDetail, type Team, type TestResult } from "../api";
 import { navigate, Link } from "../router";
-import { Badge, Button, Card, Notice, toneFor } from "../ui";
+import { Badge, Button, Card, Notice, PageHeader, toneFor } from "../ui";
 import { OriginBadge } from "./RulesPage";
 
 export const DRAFT_KEY = "kardan.ruleDraft";
@@ -26,31 +27,39 @@ presentation:
 }
 
 const editorClass =
-  "block w-full resize-y rounded-md border-0 bg-gray-950 p-3 font-mono text-[13px] leading-5 text-gray-100 ring-1 ring-gray-800 focus:ring-2 focus:ring-amber-500";
+  "block w-full resize-y rounded-md border-0 bg-gray-950 p-3 font-mono text-[13px] leading-5 text-gray-100 ring-1 ring-gray-800 focus:ring-2 focus:ring-blue-500";
 
-// Two-space indentation on Tab, so YAML stays valid while typing.
-function onTab(e: KeyboardEvent<HTMLTextAreaElement>, set: (v: string) => void) {
-  if (e.key !== "Tab") return;
-  e.preventDefault();
-  const t = e.currentTarget;
-  const { selectionStart: s, selectionEnd: end, value } = t;
-  const next = value.slice(0, s) + "  " + value.slice(end);
-  set(next);
-  requestAnimationFrame(() => t.setSelectionRange(s + 2, s + 2));
-}
+const exampleEvent = JSON.stringify({
+  type: "WORKFLOW_FAILED",
+  workflowId: "WF-00042",
+  workflowName: "order-settlement",
+  service: "settlements",
+  environment: "prod",
+  severity: "ERROR",
+  error: { code: "TIMEOUT", message: "Counterparty did not respond" },
+}, null, 2);
 
 export function RuleEditor({ id, teams }: { id: string | null; teams: Team[] }) {
   const isNew = id === null;
-  const [detail, setDetail] = useState<RuleDetail | null>(null);
-  const [yaml, setYaml] = useState("");
-  const [sample, setSample] = useState("");
+  const [created] = useState(() => {
+    const draft = window.history.state?.createdRule as { detail: RuleDetail; sample: string } | undefined;
+    return draft?.detail.rule.id === id ? draft : undefined;
+  });
+  const [detail, setDetail] = useState<RuleDetail | null>(created?.detail ?? null);
+  const [yaml, setYaml] = useState(created?.detail.yaml ?? "");
+  const [sample, setSample] = useState(created?.sample ?? "");
   const [test, setTest] = useState<TestResult | null>(null);
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [message, setMessage] = useState<{ tone: "info" | "error"; text: string } | null>(null);
+  const [message, setMessage] = useState<{ tone: "info" | "error"; text: string } | null>(
+    created ? { tone: "info", text: `Rule created (version ${created.detail.version}).` } : null,
+  );
   const [info, setInfo] = useState<Info | null>(null);
-  const [loaded, setLoaded] = useState(false);
-  const initialYaml = useRef("");
+  const [loaded, setLoaded] = useState(!!created);
+  const initialYaml = useRef(created?.detail.yaml ?? "");
+  const initialisedDraft = useRef(false);
+  const sampleEdited = useRef(false);
+  const fallbackTeam = isNew ? teams[0]?.id : undefined;
 
   useEffect(() => {
     api.info().then(setInfo).catch(() => {});
@@ -58,9 +67,9 @@ export function RuleEditor({ id, teams }: { id: string | null; teams: Team[] }) 
 
   // Load the rule (or a draft handed over from the schema page).
   useEffect(() => {
-    setLoaded(false);
-    setMessage(null);
     if (isNew) {
+      if (initialisedDraft.current) return;
+      initialisedDraft.current = true;
       let draft: RuleDraft | null = null;
       try {
         draft = JSON.parse(sessionStorage.getItem(DRAFT_KEY) ?? "null") as RuleDraft | null;
@@ -68,7 +77,7 @@ export function RuleEditor({ id, teams }: { id: string | null; teams: Team[] }) 
       } catch {
         /* ignore */
       }
-      const y = draft?.yaml ?? starterYAML(teams[0]?.id ?? "team");
+      const y = draft?.yaml ?? starterYAML(fallbackTeam ?? "team");
       setYaml(y);
       initialYaml.current = y;
       setSample(draft?.sample ?? "");
@@ -76,40 +85,63 @@ export function RuleEditor({ id, teams }: { id: string | null; teams: Team[] }) 
       setLoaded(true);
       return;
     }
-    api
-      .rule(id)
-      .then(async (d) => {
-        setDetail(d);
-        setYaml(d.yaml);
-        initialYaml.current = d.yaml;
-        setLoaded(true);
-        // Prefill the test panel with the latest real event for this rule.
-        const recent = (await api.alerts("", "")).find((a) => a.ruleId === id);
-        if (recent) {
-          const full = await api.alert(recent.id);
-          // Replay the message exactly as it arrived (XML, FIX...) so the
-          // test goes through the same parser as production.
-          setSample(full.alert.sampleRaw || JSON.stringify(full.alert.sample, null, 2));
-        }
-      })
-      .catch((e: Error) => setMessage({ tone: "error", text: e.message }));
-    // teams only matters for the starter template
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+    if (created) {
+      window.history.replaceState(null, "");
+      return;
+    }
+    let cancelled = false;
+    api.rule(id).then((rule) => {
+      if (cancelled) return;
+      setDetail(rule);
+      setYaml(rule.yaml);
+      initialYaml.current = rule.yaml;
+      setLoaded(true);
+    }).catch((error: Error) => {
+      if (!cancelled) setMessage({ tone: "error", text: error.message });
+    });
+    api.alerts("", "").then(async (alerts) => {
+      const recent = alerts.find((alert) => alert.ruleId === id);
+      if (!recent || cancelled || sampleEdited.current) return;
+      const { alert } = await api.alert(recent.id);
+      if (!cancelled && !sampleEdited.current) {
+        setSample(alert.sampleRaw || JSON.stringify(alert.sample ?? {}, null, 2));
+      }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [id, isNew, fallbackTeam, created]);
 
-  // Live dry run, debounced.
   useEffect(() => {
-    if (!loaded || !yaml.trim()) return;
-    const t = window.setTimeout(() => {
-      setTesting(true);
-      api
-        .testRule(yaml, sample || "{}")
-        .then(setTest)
-        .catch((e: Error) => setTest({ valid: false, error: e.message }))
-        .finally(() => setTesting(false));
+    if (!isNew || !fallbackTeam || initialYaml.current !== starterYAML("team")) return;
+    const previous = initialYaml.current;
+    const next = starterYAML(fallbackTeam);
+    setYaml((current) => current === previous ? next : current);
+    initialYaml.current = next;
+  }, [isNew, fallbackTeam]);
+
+  useEffect(() => {
+    if (!loaded || !yaml.trim()) {
+      setTest(null);
+      setTesting(false);
+      return;
+    }
+    let cancelled = false;
+    setTesting(true);
+    const timer = window.setTimeout(() => {
+      api.testRule(yaml, sample || "{}")
+        .then((result) => { if (!cancelled) setTest(result); })
+        .catch((error: Error) => { if (!cancelled) setTest({ valid: false, error: error.message }); })
+        .finally(() => { if (!cancelled) setTesting(false); });
     }, 400);
-    return () => window.clearTimeout(t);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [yaml, sample, loaded]);
+
+  const updateSample = (value: string) => {
+    sampleEdited.current = true;
+    setSample(value);
+  };
 
   const dirty = yaml !== initialYaml.current;
   const isFileRule = detail?.rule.origin?.startsWith("file:") ?? false;
@@ -124,7 +156,11 @@ export function RuleEditor({ id, teams }: { id: string | null; teams: Team[] }) 
       setYaml(saved.yaml);
       initialYaml.current = saved.yaml;
       setMessage({ tone: "info", text: `Saved (version ${saved.version}). Active on every replica within seconds.` });
-      if (isNew) navigate(`/rules/${encodeURIComponent(saved.rule.id)}`, true);
+      if (isNew) {
+        navigate(`/rules/${encodeURIComponent(saved.rule.id)}`, true, {
+          state: { createdRule: { detail: saved, sample } },
+        });
+      }
     } catch (e) {
       const err = e as ApiError;
       setMessage({
@@ -157,26 +193,22 @@ export function RuleEditor({ id, teams }: { id: string | null; teams: Team[] }) 
 
   return (
     <>
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        <Link to="/rules" className="text-sm text-gray-500 hover:text-gray-800 dark:hover:text-gray-200">
-          ← Rules
-        </Link>
-        <h1 className="text-xl font-semibold">{isNew ? "New rule" : detail?.rule.name || id}</h1>
-        {detail && <OriginBadge origin={detail.rule.origin} overrides={detail.rule.overrides} />}
-        {detail?.version && (
-          <span className="text-xs text-gray-500">
-            v{detail.version} · {detail.updatedBy}
-          </span>
-        )}
-        <div className="ml-auto flex gap-2">
-          {detail && detail.rule.origin === "api" && (
-            <Button onClick={() => void remove()}>{isOverride ? "Revert to file" : "Delete"}</Button>
-          )}
-          <Button variant="primary" onClick={() => void save()} disabled={saving || (!dirty && !isNew) || test?.valid === false}>
-            {saving ? "Saving…" : isFileRule ? "Save as UI override" : "Save"}
-          </Button>
-        </div>
-      </div>
+      <Link to="/rules" className="console-muted mb-3 inline-flex items-center gap-1.5 text-sm hover:underline">
+        <ArrowLeft size={15} aria-hidden="true" /> Rules
+      </Link>
+      <PageHeader title={isNew ? "New rule" : detail?.rule.name || id}
+        subtitle={detail ? <><OriginBadge origin={detail.rule.origin} overrides={detail.rule.overrides} /> <span className="ml-1">Version {detail.version}</span></> : undefined}
+        actions={
+          <>
+            {detail?.rule.origin === "api" &&
+              <Button onClick={() => void remove()}>{isOverride ? "Revert to file" : "Delete"}</Button>}
+            <Button variant="primary" onClick={() => void save()}
+              disabled={!loaded || saving || testing || !test?.valid || (!dirty && !isNew)}>
+              {saving ? "Saving…" : isNew ? "Create rule" : isFileRule ? "Save as UI override" : "Save changes"}
+            </Button>
+          </>
+        }
+      />
 
       {isFileRule && (
         <div className="mb-3">
@@ -192,38 +224,29 @@ export function RuleEditor({ id, teams }: { id: string | null; teams: Team[] }) 
         </div>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <div className="flex flex-col gap-3">
-          <label className="text-sm font-medium">Rule (YAML)</label>
-          <textarea
-            value={yaml}
-            onChange={(e) => setYaml(e.target.value)}
-            onKeyDown={(e) => onTab(e, setYaml)}
-            spellCheck={false}
-            rows={24}
-            className={editorClass}
-            aria-label="Rule YAML"
-          />
+      <div className="grid items-start gap-4 xl:grid-cols-2">
+        <section className="console-panel min-w-0 space-y-3 p-4 sm:p-5">
+          <label htmlFor="rule-yaml" className="block font-semibold">Rule definition</label>
+          <p className="console-muted text-sm">Set what the rule matches, who gets notified, and what the alert says.</p>
+          <textarea id="rule-yaml" value={yaml} onChange={(e) => setYaml(e.target.value)}
+            spellCheck={false} rows={22} className={editorClass} disabled={!loaded} />
           <Reference info={info} />
-        </div>
-
-        <div className="flex flex-col gap-3">
-          <label className="flex items-baseline justify-between text-sm font-medium">
-            Test with a sample event
-            <span className="text-xs font-normal text-gray-500">JSON, XML, FIX or a log line — parsed like live traffic</span>
-          </label>
-          <textarea
-            value={sample}
-            onChange={(e) => setSample(e.target.value)}
-            onKeyDown={(e) => onTab(e, setSample)}
-            spellCheck={false}
-            rows={10}
-            placeholder='{"type": "WORKFLOW_FAILED", "severity": "ERROR", ...}'
-            className={editorClass}
-            aria-label="Sample event"
-          />
-          <TestPanel test={test} testing={testing} hasSample={sample.trim() !== ""} fieldRows={fieldRows} />
-        </div>
+        </section>
+        <section className="console-panel min-w-0 space-y-3 p-4 sm:p-5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <label htmlFor="sample-event" className="flex items-center gap-2 font-semibold">
+              <FlaskConical size={17} className="text-[var(--console-accent)]" aria-hidden="true" /> Test with a sample event
+            </label>
+            {!sample.trim() && <Button onClick={() => updateSample(exampleEvent)}>Load example</Button>}
+          </div>
+          <p id="test-help" className="console-muted text-sm">Paste JSON, XML, FIX or a log line to preview the result. Testing sends no notifications.</p>
+          <textarea id="sample-event" value={sample} onChange={(e) => updateSample(e.target.value)}
+            aria-describedby="test-help" spellCheck={false} rows={9} placeholder="Paste the event as received"
+            className={editorClass} />
+          <div aria-live="polite" aria-busy={testing}>
+            <TestPanel test={test} testing={testing} hasSample={sample.trim() !== ""} fieldRows={fieldRows} />
+          </div>
+        </section>
       </div>
     </>
   );
@@ -240,7 +263,9 @@ function TestPanel({
   hasSample: boolean;
   fieldRows: [string, unknown][];
 }) {
-  if (!test) return <Card className="p-4 text-sm text-gray-500">{testing ? "Checking…" : "Edit the rule to see a live check."}</Card>;
+  if (testing || !test) {
+    return <Card className="p-4 text-sm text-gray-500">{testing ? "Checking rule…" : "Enter a rule to check its syntax."}</Card>;
+  }
   if (!test.valid) {
     return (
       <Notice tone="error">
@@ -252,7 +277,7 @@ function TestPanel({
   const a = test.alert;
   return (
     <Card className="p-4">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Badge className="bg-emerald-50 text-emerald-700 ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-300">valid</Badge>
         {hasSample &&
           (test.matches ? (
@@ -261,11 +286,11 @@ function TestPanel({
             <Badge className="bg-gray-100 text-gray-600 ring-gray-300 dark:bg-gray-800 dark:text-gray-300">does not match</Badge>
           ))}
         {test.format && <span className="text-xs text-gray-500">parsed as {test.format}</span>}
-        {testing && <span className="ml-auto text-xs text-gray-400">checking…</span>}
+
       </div>
 
       {fieldRows.length > 0 && hasSample && (
-        <table className="mt-3 w-full text-xs">
+        <table className="mt-3 w-full table-fixed text-xs break-all">
           <thead>
             <tr className="text-left text-gray-500">
               <th className="py-1 font-medium">Field used by the rule</th>

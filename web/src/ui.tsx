@@ -44,6 +44,8 @@ export function Badge({ className = "", children }: { className?: string; childr
   );
 }
 
+export const alertStatusLabel = { open: "Open", acked: "Acknowledged", resolved: "Resolved" } as const;
+
 export const statusBadge: Record<string, string> = {
   open: "bg-white text-gray-900 ring-gray-300 dark:bg-gray-900 dark:text-gray-100 dark:ring-gray-600",
   acked: "bg-sky-50 text-sky-700 ring-sky-600/20 dark:bg-sky-500/10 dark:text-sky-300 dark:ring-sky-400/30",
@@ -70,7 +72,7 @@ export function Button({
 }) {
   const styles =
     variant === "primary"
-      ? "bg-gray-900 text-white hover:bg-gray-700 dark:bg-white dark:text-gray-900 dark:hover:bg-gray-200"
+      ? "bg-blue-700 text-white hover:bg-blue-800 dark:bg-blue-400 dark:text-gray-950 dark:hover:bg-blue-300"
       : "bg-white text-gray-900 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-100 dark:ring-gray-600 dark:hover:bg-gray-700";
   return (
     <button
@@ -80,7 +82,7 @@ export function Button({
         e.stopPropagation();
         onClick();
       }}
-      className={`rounded-md px-2.5 py-1.5 text-sm font-medium shadow-xs transition disabled:cursor-not-allowed disabled:opacity-50 ${styles}`}
+      className={`inline-flex min-h-9 items-center justify-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium shadow-xs transition disabled:cursor-not-allowed disabled:opacity-50 ${styles}`}
     >
       {children}
     </button>
@@ -127,9 +129,9 @@ export function FinanceChip({ kind, sensitive }: { kind: string; sensitive?: boo
 
 export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: ReactNode; actions?: ReactNode }) {
   return (
-    <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+    <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
       <div>
-        <h1 className="text-xl font-semibold text-gray-900 dark:text-gray-50">{title}</h1>
+        <h1 className="text-3xl font-semibold tracking-tight text-gray-950 dark:text-gray-50">{title}</h1>
         {subtitle && <p className="mt-1 max-w-3xl text-sm text-gray-500 dark:text-gray-400">{subtitle}</p>}
       </div>
       {actions && <div className="flex gap-2">{actions}</div>}
@@ -151,4 +153,4 @@ export function Notice({ tone: t = "info", children }: { tone?: "info" | "warn" 
 }
 
 export const inputClass =
-  "w-full rounded-md border-0 bg-white px-2.5 py-1.5 text-sm text-gray-900 ring-1 ring-gray-300 ring-inset placeholder:text-gray-400 focus:ring-2 focus:ring-amber-500 dark:bg-gray-950 dark:text-gray-100 dark:ring-gray-700";
+  "w-full rounded-md border-0 bg-white px-2.5 py-1.5 text-sm text-gray-900 ring-1 ring-gray-300 ring-inset placeholder:text-gray-400 focus:ring-2 focus:ring-blue-600 dark:bg-gray-950 dark:text-gray-100 dark:ring-gray-700";

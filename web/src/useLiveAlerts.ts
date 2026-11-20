@@ -19,6 +19,8 @@ export function useLiveAlerts(team: string, filter: StatusFilter, onSchema?: (s:
   onSchemaRef.current = onSchema;
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [connection, setConnection] = useState<Connection>("connecting");
+  const [loading, setLoading] = useState(true);
+  const request = useRef(0);
   const [error, setError] = useState<string | null>(null);
   const [flash, setFlash] = useState<Set<string>>(new Set());
   const flashTimers = useRef(new Map<string, number>());
@@ -41,12 +43,16 @@ export function useLiveAlerts(team: string, filter: StatusFilter, onSchema?: (s:
   }, []);
 
   const reload = useCallback(async () => {
+    const id = ++request.current;
     try {
       const list = await api.alerts(team, filter);
+      if (id !== request.current) return;
       setAlerts(list);
       setError(null);
     } catch (e) {
-      setError((e as Error).message);
+      if (id === request.current) setError((e as Error).message);
+    } finally {
+      if (id === request.current) setLoading(false);
     }
   }, [team, filter]);
 
@@ -66,7 +72,7 @@ export function useLiveAlerts(team: string, filter: StatusFilter, onSchema?: (s:
         }
         if (u.alert) {
           const rest = prev.filter((a) => a.id !== u.alert!.id);
-          if (!matchesFilter(u.alert, filter)) return rest;
+          if ((team && u.alert.team !== team) || !matchesFilter(u.alert, filter)) return rest;
           return [u.alert, ...rest].sort(byLastSeen);
         }
         return prev;
@@ -74,11 +80,15 @@ export function useLiveAlerts(team: string, filter: StatusFilter, onSchema?: (s:
       const id = u.alert?.id ?? u.id;
       if (id) markFlash(id);
     },
-    [filter, markFlash],
+    [team, filter, markFlash],
   );
 
   useEffect(() => {
     setConnection("connecting");
+    setLoading(true);
+    setAlerts([]);
+    setError(null);
+    void reload();
     const es = new EventSource(api.streamURL(team));
     es.addEventListener("ready", () => {
       setConnection("live");
@@ -86,11 +96,14 @@ export function useLiveAlerts(team: string, filter: StatusFilter, onSchema?: (s:
     });
     es.addEventListener("alert", (ev) => apply(JSON.parse((ev as MessageEvent<string>).data) as Update));
     es.onerror = () => setConnection(es.readyState === EventSource.CLOSED ? "offline" : "connecting");
-    return () => es.close();
+    return () => {
+      es.close();
+      request.current++;
+    };
   }, [team, reload, apply]);
 
   // Apply optimistic results of ack/resolve immediately.
   const replace = useCallback((a: Alert) => apply({ kind: "status", team: a.team, alert: a }), [apply]);
 
-  return { alerts, connection, error, flash, reload, replace };
+  return { alerts, connection, error, loading, flash, reload, replace };
 }
