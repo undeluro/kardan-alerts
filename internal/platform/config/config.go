@@ -45,6 +45,18 @@ type Config struct {
 	SMTPAddr string
 	SMTPFrom string
 
+	// SMS / voice provider. In docker-compose this is the fake gateway with a
+	// phone simulator; a real provider would be another channel adapter.
+	GatewayURL       string
+	GatewayPublicURL string // where people open the phone simulator
+	GatewayToken     string // shared secret for outbound calls and inbound replies
+
+	// Fallbacks maps a channel to the one used when it keeps failing.
+	Fallbacks map[string]string
+
+	// DemoMode enables the shared business clock offset (time travel for demos).
+	DemoMode bool
+
 	ConfigDir string // rules, teams, sources (YAML)
 
 	DedupWindow     time.Duration
@@ -84,6 +96,11 @@ func Load() (Config, error) {
 		ProcessorBatch:   envInt("PROCESSOR_BATCH", 2000),
 		SMTPAddr:         env("SMTP_ADDR", "localhost:1025"),
 		SMTPFrom:         env("SMTP_FROM", "kardan-alerts@example.com"),
+		GatewayURL:       env("GATEWAY_URL", "http://localhost:8090"),
+		GatewayPublicURL: strings.TrimRight(env("GATEWAY_PUBLIC_URL", "http://localhost:8090"), "/"),
+		GatewayToken:     env("GATEWAY_TOKEN", ""),
+		Fallbacks:        parsePairs(env("FALLBACKS", "phone:sms,sms:email")),
+		DemoMode:         env("DEMO_MODE", "false") == "true",
 		ConfigDir:        env("CONFIG_DIR", "./config"),
 		DedupWindow:      envDuration("DEDUP_WINDOW", 5*time.Minute),
 		DispatchWorkers:  envInt("DISPATCH_WORKERS", 16),
@@ -121,6 +138,17 @@ func parseRoles(s string) (map[Role]bool, error) {
 		return nil, fmt.Errorf("ROLES is empty")
 	}
 	return out, nil
+}
+
+// parsePairs reads "phone:sms,sms:email".
+func parsePairs(s string) map[string]string {
+	out := map[string]string{}
+	for _, pair := range strings.Split(s, ",") {
+		if k, v, ok := strings.Cut(strings.TrimSpace(pair), ":"); ok && k != "" && v != "" {
+			out[k] = v
+		}
+	}
+	return out
 }
 
 func env(key, def string) string {

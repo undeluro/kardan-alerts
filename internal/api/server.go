@@ -17,6 +17,7 @@ import (
 	"github.com/undeluro/kardan-alerts/internal/directory"
 	"github.com/undeluro/kardan-alerts/internal/event"
 	"github.com/undeluro/kardan-alerts/internal/ingest"
+	"github.com/undeluro/kardan-alerts/internal/platform/clock"
 	"github.com/undeluro/kardan-alerts/internal/rules"
 	"github.com/undeluro/kardan-alerts/internal/schema"
 )
@@ -33,6 +34,9 @@ type Server struct {
 	Notify        func(ctx context.Context, kind string) error
 	ParseRaw      func(source string, raw []byte) *event.Envelope
 	DefaultWindow time.Duration
+	Clock         *clock.Clock
+	GatewayToken  string
+	ChannelStates func(r *http.Request) map[string]string // breaker state per channel
 	Hub           *Hub
 	UI            fs.FS // built React app; nil when not embedded
 	Log           *slog.Logger
@@ -57,6 +61,14 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/schemas/{id}", s.getSchema)
 	mux.HandleFunc("PUT /api/schemas/{id}", s.updateSchema)
 	mux.HandleFunc("GET /api/sources", s.listSources)
+	mux.HandleFunc("GET /api/deliveries", s.listDeliveries)
+	mux.HandleFunc("POST /api/notifications/{id}/resend", s.resend)
+	mux.HandleFunc("GET /api/channels", s.channels)
+	mux.HandleFunc("GET /api/oncall", s.onCall)
+	mux.HandleFunc("GET /api/clock", s.getClock)
+	mux.HandleFunc("PUT /api/clock", s.setClock)
+	mux.HandleFunc("POST /inbound/sms", s.gatewayAuth(s.inboundSMS))
+	mux.HandleFunc("POST /inbound/call", s.gatewayAuth(s.inboundCall))
 	mux.Handle("GET /api/stream", s.Hub)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "no such endpoint")
@@ -126,10 +138,7 @@ func (s *Server) transition(action string) http.HandlerFunc {
 			s.fail(w, err)
 			return
 		}
-		a.Sample, a.SampleRaw = nil, ""
-		if err := s.Publisher.Publish(r.Context(), []alerting.Update{{Kind: "status", Team: a.Team, Alert: a}}); err != nil {
-			s.Log.Warn("publish status update", "err", err)
-		}
+		s.publishStatus(r, a)
 		writeJSON(w, http.StatusOK, a)
 	}
 }
@@ -145,7 +154,7 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) teams(w http.ResponseWriter, _ *http.Request) {
 	d := s.Directory()
-	writeJSON(w, http.StatusOK, map[string]any{"teams": d.Teams, "people": d.People})
+	writeJSON(w, http.StatusOK, map[string]any{"teams": d.Teams, "people": d.People, "defaultPreferences": d.Defaults})
 }
 
 type ruleView struct {

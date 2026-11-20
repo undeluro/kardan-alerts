@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Phone Simulator · Kardan</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23111827'/><rect x='10' y='6' width='12' height='20' rx='2.5' fill='none' stroke='%23f59e0b' stroke-width='2.5'/></svg>">
+<style>
+  :root {
+    --bg: #f4f5f7; --panel: #fff; --ink: #111827; --muted: #6b7280; --line: #e5e7eb;
+    --accent: #d97706; --in: #2563eb; --out: #eef0f3; --ok: #059669; --bad: #dc2626; --warn: #d97706;
+    --phone: #0b0f17;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #070a10; --panel: #0f141d; --ink: #e5e7eb; --muted: #9ca3af; --line: #1f2733; --out: #1c2430; --phone: #000; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--ink); }
+  header { display: flex; align-items: center; gap: 10px; padding: 12px 20px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  header .logo { width: 28px; height: 28px; border-radius: 7px; background: #111827; color: #f59e0b; display: grid; place-items: center; font-weight: 700; }
+  header h1 { font-size: 15px; margin: 0; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  header .live { margin-left: auto; font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); display: inline-block; }
+  .dot.on { background: var(--ok); }
+  main { display: grid; grid-template-columns: 260px minmax(320px, 420px) 1fr; gap: 16px; padding: 16px 20px; max-width: 1400px; margin: auto; }
+  @media (max-width: 1000px) { main { grid-template-columns: 1fr; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  .people button { display: flex; width: 100%; align-items: center; gap: 10px; padding: 10px 14px; border: 0; border-bottom: 1px solid var(--line); background: none; color: inherit; text-align: left; cursor: pointer; font: inherit; }
+  .people button:hover { background: color-mix(in srgb, var(--accent) 7%, transparent); }
+  .people button.sel { background: color-mix(in srgb, var(--accent) 14%, transparent); }
+  .avatar { width: 30px; height: 30px; border-radius: 50%; background: #374151; color: #fff; display: grid; place-items: center; font-size: 12px; font-weight: 600; flex: none; }
+  .people .who { flex: 1; min-width: 0; }
+  .people .num { color: var(--muted); font-size: 12px; font-family: ui-monospace, monospace; }
+  .badge { background: var(--bad); color: #fff; border-radius: 999px; font-size: 11px; padding: 1px 7px; }
+  .phone { background: var(--phone); border-radius: 34px; padding: 14px; box-shadow: 0 20px 40px rgba(0,0,0,.25); position: relative; }
+  .screen { background: var(--bg); border-radius: 24px; height: 640px; display: flex; flex-direction: column; overflow: hidden; position: relative; }
+  .screen .top { padding: 14px 16px 10px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  .screen .top b { display: block; }
+  .screen .top span { color: var(--muted); font-size: 12px; }
+  .thread { flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .bubble { max-width: 85%; padding: 8px 11px; border-radius: 16px; white-space: pre-wrap; word-break: break-word; }
+  .bubble.out { background: var(--out); align-self: flex-start; border-bottom-left-radius: 5px; }
+  .bubble.in { background: var(--in); color: #fff; align-self: flex-end; border-bottom-right-radius: 5px; }
+  .bubble.sys { align-self: center; background: none; color: var(--muted); font-size: 12px; text-align: center; }
+  .bubble .meta { display: block; font-size: 11px; opacity: .65; margin-top: 3px; }
+  .callcard { align-self: stretch; border: 1px solid var(--line); background: var(--panel); border-radius: 14px; padding: 10px 12px; }
+  .callcard .st { font-size: 12px; font-weight: 600; }
+  .compose { display: flex; flex-direction: column; gap: 6px; padding: 10px; border-top: 1px solid var(--line); background: var(--panel); }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip { border: 1px solid var(--line); background: none; color: inherit; border-radius: 999px; padding: 3px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+  .chip:hover { border-color: var(--accent); }
+  .compose form { display: flex; gap: 6px; }
+  input[type=text] { flex: 1; border: 1px solid var(--line); border-radius: 999px; padding: 8px 12px; background: var(--bg); color: inherit; font: inherit; }
+  button.send { border: 0; border-radius: 999px; background: var(--in); color: #fff; padding: 0 14px; font: inherit; cursor: pointer; }
+  .ringing { position: absolute; inset: 0; background: linear-gradient(180deg, #111827, #1f2937); color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 24px; text-align: center; z-index: 5; }
+  .ringing .ico { width: 72px; height: 72px; border-radius: 50%; background: #059669; display: grid; place-items: center; font-size: 32px; animation: pulse 1.2s infinite; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(5,150,105,.6); } 70% { box-shadow: 0 0 0 22px rgba(5,150,105,0); } 100% { box-shadow: 0 0 0 0 rgba(5,150,105,0); } }
+  .ringing p { color: #d1d5db; font-size: 13px; max-width: 300px; }
+  .ringing .keys { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+  .ringing button { border: 0; border-radius: 999px; padding: 10px 16px; font: inherit; cursor: pointer; }
+  .k1 { background: #059669; color: #fff; } .k2 { background: #dc2626; color: #fff; } .kl { background: #374151; color: #fff; }
+  .empty { color: var(--muted); text-align: center; margin: auto; padding: 20px; font-size: 13px; }
+  .ctl { padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+  .modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .modes button { border: 1px solid var(--line); border-radius: 8px; padding: 10px 6px; background: none; color: inherit; cursor: pointer; font: inherit; }
+  .modes button.sel.ok { border-color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent); }
+  .modes button.sel.flaky { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+  .modes button.sel.down { border-color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, transparent); }
+  .modes b { display: block; }
+  .modes span { font-size: 11px; color: var(--muted); }
+  label.row { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+  label.row input { flex: 1; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .stat { border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+  .stat small { color: var(--muted); display: block; font-size: 11px; }
+  .stat b { font-size: 18px; font-variant-numeric: tabular-nums; }
+  .log { max-height: 300px; overflow-y: auto; font-family: ui-monospace, monospace; font-size: 12px; border-top: 1px solid var(--line); }
+  .log div { padding: 4px 14px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; }
+  .log .t { color: var(--muted); }
+  .log .accepted { color: var(--ok); } .log .rejected { color: var(--bad); } .log .dup { color: var(--muted); }
+  .hint { color: var(--muted); font-size: 12px; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">K</div>
+  <div>
+    <h1>Phone &amp; SMS gateway simulator</h1>
+    <div class="sub">Stands in for an SMS / voice provider. Reply to messages and answer calls as the recipient.</div>
+  </div>
+  <div class="live"><span id="dot" class="dot"></span><span id="live">connecting…</span></div>
+</header>
+<main>
+  <section class="card">
+    <h2>Handsets</h2>
+    <div class="people" id="people"></div>
+  </section>
+
+  <section>
+    <div class="phone">
+      <div class="screen" id="screen">
+        <div class="top"><b id="who">Select a handset</b><span id="whoNum"></span></div>
+        <div class="thread" id="thread"><div class="empty">Messages and calls from Kardan appear here.</div></div>
+        <div class="compose">
+          <div class="chips" id="chips"></div>
+          <form id="form"><input type="text" id="text" placeholder="Reply as this person…" autocomplete="off"><button class="send">Send</button></form>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Provider health (failure injection)</h2>
+    <div class="ctl">
+      <div class="modes" id="modes">
+        <button data-mode="ok" class="ok"><b>Healthy</b><span>accept everything</span></button>
+        <button data-mode="flaky" class="flaky"><b>Flaky</b><span id="flakyLbl">30% errors</span></button>
+        <button data-mode="down" class="down"><b>Down</b><span>503 for all</span></button>
+      </div>
+      <label class="row">Error rate <input type="range" id="rate" min="0" max="100" step="5" value="30"><span id="rateVal">30%</span></label>
+      <label class="row">Added latency <input type="range" id="latency" min="0" max="3000" step="100" value="0"><span id="latVal">0 ms</span></label>
+      <div class="hint">When the provider is down Kardan keeps the messages, opens its circuit breaker, switches critical alerts to the fallback channel, and delivers the backlog when the provider recovers. Watch the <a id="kardanLink" href="http://localhost:8080/deliveries" target="_blank" rel="noopener">Deliveries page</a>.</div>
+      <div class="stats">
+        <div class="stat"><small>Delivered</small><b id="sRecv">0</b></div>
+        <div class="stat"><small>Rejected</small><b id="sRej">0</b></div>
+        <div class="stat"><small>p50 latency</small><b id="sP50">–</b></div>
+        <div class="stat"><small>p99 latency</small><b id="sP99">–</b></div>
+      </div>
+      <div class="hint">Latency is measured here, outside Kardan: from the moment Kardan accepted the event to the moment this provider received the message.</div>
+    </div>
+    <div class="log" id="log"></div>
+  </section>
+</main>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const norm = (p) => (p || "").replace(/[^+\d]/g, "");
+const fmtTime = (iso) => new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+const state = { msgs: [], people: new Map(), selected: null, unread: new Map(), faults: { mode: "ok", errorRate: 0.3, latencyMs: 0 }, ringing: null };
+
+async function api(path, opts) {
+  const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
+  if (!r.ok) throw new Error(await r.text());
+  return r.status === 204 ? null : r.json();
+}
+
+function phones() {
+  const map = new Map();
+  for (const [num, p] of state.people) map.set(num, p);
+  for (const m of state.msgs) { const n = norm(m.phone); if (n && !map.has(n)) map.set(n, { name: m.phone, phone: m.phone }); }
+  return map;
+}
+
+function renderPeople() {
+  const box = $("people"); box.replaceChildren();
+  const list = [...phones().entries()];
+  if (!list.length) { box.append(el("div", "empty", "No handsets yet.")); return; }
+  for (const [num, p] of list) {
+    const b = el("button", num === state.selected ? "sel" : "");
+    const initials = (p.name || "?").split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+    b.append(el("span", "avatar", initials));
+    const who = el("span", "who"); who.append(el("div", "", p.name || num), el("div", "num", p.phone || num));
+    b.append(who);
+    const u = state.unread.get(num) || 0;
+    if (u) b.append(el("span", "badge", String(u)));
+    b.onclick = () => select(num);
+    box.append(b);
+  }
+}
+
+function select(num) {
+  state.selected = num; state.unread.set(num, 0);
+  const p = phones().get(num) || {};
+  $("who").textContent = p.name || num; $("whoNum").textContent = p.phone || num;
+  renderPeople(); renderThread();
+}
+
+function renderThread() {
+  const box = $("thread"); box.replaceChildren();
+  const mine = state.msgs.filter((m) => norm(m.phone) === state.selected);
+  if (!state.selected) { box.append(el("div", "empty", "Select a handset on the left.")); renderChips(null); return; }
+  if (!mine.length) box.append(el("div", "empty", "No messages for this handset yet."));
+  for (const m of mine) {
+    if (m.kind === "call") {
+      const c = el("div", "callcard");
+      const label = { ringing: "📞 Incoming call…", acknowledged: "📞 Call — acknowledged with 1", declined: "📞 Call — declined" }[m.status] || "📞 Call";
+      c.append(el("div", "st", label), el("div", "", m.text), el("span", "hint", fmtTime(m.at) + (m.latencyMs ? ` · ${Math.round(m.latencyMs)} ms after the event` : "")));
+      box.append(c);
+      continue;
+    }
+    const cls = m.kind === "system" ? "bubble sys" : m.direction === "in" ? "bubble in" : "bubble out";
+    const b = el("div", cls, m.text);
+    const meta = m.kind === "reply" ? "Kardan · " + fmtTime(m.at) : fmtTime(m.at) + (m.latencyMs ? ` · ${Math.round(m.latencyMs)} ms after the event` : "");
+    if (m.kind !== "system") b.append(el("span", "meta", meta));
+    box.append(b);
+  }
+  box.scrollTop = box.scrollHeight;
+  const lastCode = [...mine].reverse().find((m) => m.shortCode)?.shortCode || null;
+  renderChips(lastCode);
+}
+
+function renderChips(code) {
+  const box = $("chips"); box.replaceChildren();
+  const opts = code ? [`ACK ${code}`, `RESOLVE ${code}`, "HELP"] : ["ACK", "HELP"];
+  for (const t of opts) { const c = el("button", "chip", t); c.type = "button"; c.onclick = () => sendReply(t); box.append(c); }
+}
+
+async function sendReply(text) {
+  if (!state.selected || !text.trim()) return;
+  const p = phones().get(state.selected) || {};
+  await api("/api/reply", { method: "POST", body: JSON.stringify({ phone: p.phone || state.selected, text }) }).catch((e) => alert(e.message));
+}
+
+$("form").onsubmit = (e) => { e.preventDefault(); const t = $("text").value; $("text").value = ""; sendReply(t); };
+
+function showRinging(m) {
+  hideRinging();
+  state.ringing = m.id;
+  const p = phones().get(norm(m.phone)) || {};
+  const o = el("div", "ringing"); o.id = "ringing";
+  o.append(el("div", "ico", "📞"), el("div", "", "Incoming call · Kardan Alerts"), el("b", "", "to " + (p.name || m.phone)), el("p", "", m.text));
+  const keys = el("div", "keys");
+  const k1 = el("button", "k1", "Press 1 · Acknowledge"); k1.onclick = () => press(m.id, "1");
+  const k2 = el("button", "k2", "Press 2 · Decline"); k2.onclick = () => press(m.id, "2");
+  const kl = el("button", "kl", "🔊 Listen"); kl.onclick = () => { try { speechSynthesis.cancel(); speechSynthesis.speak(new SpeechSynthesisUtterance(m.text)); } catch {} };
+  keys.append(k1, k2, kl); o.append(keys);
+  $("screen").append(o);
+  if (state.selected !== norm(m.phone)) select(norm(m.phone));
+}
+function hideRinging() { $("ringing")?.remove(); state.ringing = null; try { speechSynthesis.cancel(); } catch {} }
+async function press(id, digit) { hideRinging(); await api("/api/press", { method: "POST", body: JSON.stringify({ id, digit }) }).catch((e) => alert(e.message)); }
+
+function renderFaults() {
+  const f = state.faults;
+  for (const b of $("modes").querySelectorAll("button")) b.classList.toggle("sel", b.dataset.mode === f.mode);
+  $("rate").value = Math.round(f.errorRate * 100); $("rateVal").textContent = Math.round(f.errorRate * 100) + "%";
+  $("flakyLbl").textContent = Math.round(f.errorRate * 100) + "% errors";
+  $("latency").value = f.latencyMs; $("latVal").textContent = f.latencyMs + " ms";
+}
+async function setFaults(patch) {
+  state.faults = await api("/api/faults", { method: "PUT", body: JSON.stringify({ ...state.faults, ...patch }) });
+  renderFaults();
+}
+for (const b of $("modes").querySelectorAll("button")) b.onclick = () => setFaults({ mode: b.dataset.mode });
+$("rate").oninput = (e) => { $("rateVal").textContent = e.target.value + "%"; };
+$("rate").onchange = (e) => setFaults({ errorRate: Number(e.target.value) / 100 });
+$("latency").oninput = (e) => { $("latVal").textContent = e.target.value + " ms"; };
+$("latency").onchange = (e) => setFaults({ latencyMs: Number(e.target.value) });
+
+function addLog(r) {
+  const box = $("log");
+  const row = el("div");
+  const cls = r.outcome.startsWith("accepted") ? "accepted" : r.outcome.startsWith("duplicate") ? "dup" : "rejected";
+  row.append(el("span", "t", fmtTime(r.at)), el("span", "", r.kind.toUpperCase()), el("span", "", r.to), el("span", cls, r.outcome));
+  box.prepend(row);
+  while (box.children.length > 150) box.lastChild.remove();
+}
+
+async function refreshStats() {
+  const s = await api("/api/stats").catch(() => null);
+  if (!s) return;
+  $("sRecv").textContent = s.received; $("sRej").textContent = s.rejected;
+  $("sP50").textContent = s.p50Ms != null ? Math.round(s.p50Ms) + " ms" : "–";
+  $("sP99").textContent = s.p99Ms != null ? Math.round(s.p99Ms) + " ms" : "–";
+}
+
+function onMessage(m, isNew) {
+  const i = state.msgs.findIndex((x) => x.id === m.id);
+  if (i >= 0) state.msgs[i] = m; else state.msgs.push(m);
+  const num = norm(m.phone);
+  if (isNew && m.direction === "out" && num !== state.selected) state.unread.set(num, (state.unread.get(num) || 0) + 1);
+  if (isNew && m.kind === "call" && m.status === "ringing") showRinging(m);
+  if (!state.selected && num) select(num); else { renderPeople(); if (num === state.selected) renderThread(); }
+}
+
+async function boot() {
+  try {
+    const d = await api("/api/people");
+    for (const p of d.people || []) if (p.phone) state.people.set(norm(p.phone), p);
+  } catch {}
+  const d = await api("/api/messages");
+  state.msgs = d.messages || [];
+  for (const r of d.requests || []) addLog(r);
+  state.faults = await api("/api/faults");
+  renderFaults(); renderPeople();
+  const first = [...phones().keys()][0];
+  if (first) select(first);
+  refreshStats(); setInterval(refreshStats, 2000);
+
+  const es = new EventSource("/api/stream");
+  es.addEventListener("ready", () => { $("dot").classList.add("on"); $("live").textContent = "live"; });
+  es.onerror = () => { $("dot").classList.remove("on"); $("live").textContent = "reconnecting…"; };
+  es.addEventListener("message", (e) => onMessage(JSON.parse(e.data), true));
+  es.addEventListener("update", (e) => onMessage(JSON.parse(e.data), false));
+  es.addEventListener("faults", (e) => { state.faults = JSON.parse(e.data); renderFaults(); });
+  es.addEventListener("request", (e) => addLog(JSON.parse(e.data)));
+}
+boot();
+</script>
+</body>
+</html>

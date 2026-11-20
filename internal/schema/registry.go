@@ -60,15 +60,20 @@ type Registry struct {
 	Log  *slog.Logger
 
 	mu     sync.RWMutex
-	known  map[string]map[string]string // signature -> auto facets
-	stored map[string]bool              // signatures already persisted by this replica
+	known  map[string]*known // signature -> detection results
+	stored map[string]bool   // signatures already persisted by this replica
 	manual atomic.Pointer[map[string]map[string]string]
 }
 
 const maxKnown = 20000
 
+type known struct {
+	auto  map[string]string // facet -> path
+	kinds map[string]string // path -> detected finance kind (for classification)
+}
+
 func NewRegistry(pool *pgxpool.Pool, log *slog.Logger) *Registry {
-	r := &Registry{Pool: pool, Log: log, known: map[string]map[string]string{}, stored: map[string]bool{}}
+	r := &Registry{Pool: pool, Log: log, known: map[string]*known{}, stored: map[string]bool{}}
 	empty := map[string]map[string]string{}
 	r.manual.Store(&empty)
 	return r
@@ -78,23 +83,41 @@ func NewRegistry(pool *pgxpool.Pool, log *slog.Logger) *Registry {
 // fields is non-nil only the first time this replica sees the signature.
 func (r *Registry) Identify(payload []byte) (sig string, overrides map[string]string, fields []FieldInfo) {
 	sig = Signature(payload)
-	r.mu.RLock()
-	auto, ok := r.known[sig]
-	r.mu.RUnlock()
-	if !ok {
+	k := r.lookup(sig)
+	if k == nil {
 		fields = Flatten(payload)
-		auto = AutoFacets(fields)
+		k = &known{auto: AutoFacets(fields), kinds: map[string]string{}}
+		for _, f := range fields {
+			if f.Detected != "" {
+				k.kinds[f.Path] = f.Detected
+			}
+		}
 		r.mu.Lock()
 		if len(r.known) < maxKnown {
-			r.known[sig] = auto
+			r.known[sig] = k
 		}
 		r.mu.Unlock()
 	}
 	manual := (*r.manual.Load())[sig]
 	if len(manual) == 0 {
-		return sig, auto, fields
+		return sig, k.auto, fields
 	}
-	return sig, merge(auto, manual), fields
+	return sig, merge(k.auto, manual), fields
+}
+
+func (r *Registry) lookup(sig string) *known {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.known[sig]
+}
+
+// Kinds returns path -> detected finance kind for a signature seen by
+// Identify (used to classify fields for masking).
+func (r *Registry) Kinds(sig string) map[string]string {
+	if k := r.lookup(sig); k != nil {
+		return k.kinds
+	}
+	return nil
 }
 
 // Observation aggregates one batch's events of a signature.

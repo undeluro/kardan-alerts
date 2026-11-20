@@ -104,14 +104,29 @@ func InsertNotifications(ctx context.Context, tx pgx.Tx, ns []Notification) erro
 	if len(ns) == 0 {
 		return nil
 	}
-	rows := make([][]any, len(ns))
-	for i, n := range ns {
-		rows[i] = []any{n.ID, n.AlertID, n.Recipient, n.Channel, n.Address, n.Subject, n.BodyText, n.BodyHTML,
-			n.EventReceivedAt}
+	// Primaries first: standby fallbacks reference them.
+	rows := make([][]any, 0, len(ns))
+	for pass := 0; pass < 2; pass++ {
+		for _, n := range ns {
+			isFallback := n.FallbackFor != ""
+			if (pass == 0) == isFallback {
+				continue
+			}
+			status := n.Status
+			if status == "" {
+				status = "pending"
+			}
+			var fb any
+			if isFallback {
+				fb = n.FallbackFor
+			}
+			rows = append(rows, []any{n.ID, n.AlertID, n.Recipient, n.Channel, n.Address, n.Subject, n.BodyText,
+				n.BodyHTML, n.EventReceivedAt, status, fb, n.Reason})
+		}
 	}
 	_, err := tx.CopyFrom(ctx, pgx.Identifier{"notifications"},
 		[]string{"id", "alert_id", "recipient", "channel", "address", "subject", "body_text", "body_html",
-			"event_received_at"},
+			"event_received_at", "status", "fallback_for", "reason"},
 		pgx.CopyFromRows(rows))
 	if err != nil {
 		return fmt.Errorf("insert notifications: %w", err)
@@ -212,20 +227,16 @@ func (s *Store) Resolve(ctx context.Context, id, by string) (*Alert, error) {
 }
 
 func (s *Store) Notifications(ctx context.Context, alertID string) ([]Notification, error) {
-	rows, err := s.Pool.Query(ctx, `
-		SELECT id, alert_id, recipient, channel, address, subject, body_text, status, attempts,
-		       next_attempt_at, last_error, event_received_at, created_at, sent_at
-		FROM notifications WHERE alert_id = $1 ORDER BY created_at, id`, alertID)
+	rows, err := s.Pool.Query(ctx, `SELECT `+notificationCols+` FROM notifications n
+		WHERE n.alert_id = $1 ORDER BY n.created_at, n.fallback_for NULLS FIRST, n.id`, alertID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	out := []Notification{}
 	for rows.Next() {
-		var n Notification
-		if err := rows.Scan(&n.ID, &n.AlertID, &n.Recipient, &n.Channel, &n.Address, &n.Subject, &n.BodyText,
-			&n.Status, &n.Attempts, &n.NextAttemptAt, &n.LastError, &n.EventReceivedAt, &n.CreatedAt,
-			&n.SentAt); err != nil {
+		n, err := scanNotification(rows)
+		if err != nil {
 			return nil, err
 		}
 		out = append(out, n)

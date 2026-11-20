@@ -10,7 +10,8 @@ rules:
         - { field: $format,       op: eq, value: fix }
         - { field: OrdStatusName, op: eq, value: Rejected }
     routing:
-      - { to: team:etrading, channels: [email, ui] }
+      - { to: oncall:etrading, channels: [preferences] }   # follow-the-sun on-call
+      - { to: team:etrading,   channels: [ui] }
     presentation:
       title: "Order rejected: {{SideName}} {{OrderQty | number}} {{Symbol}} — {{Text | default \"no reason given\"}}"
       fields:

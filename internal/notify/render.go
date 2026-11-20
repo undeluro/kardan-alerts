@@ -33,10 +33,11 @@ func (r Renderer) Render(channel string, a *alerting.Alert) Message {
 	switch channel {
 	case "sms":
 		text := fmt.Sprintf("[%s] %s", sev, a.Title)
-		if len([]rune(text)) > 140 {
-			text = string([]rune(text)[:139]) + "…"
+		if len([]rune(text)) > 120 {
+			text = string([]rune(text)[:119]) + "…"
 		}
-		return Message{Subject: a.Title, BodyText: text + " " + r.link(a)}
+		code := alerting.ShortCode(a.ID)
+		return Message{Subject: a.Title, BodyText: fmt.Sprintf("%s · Reply ACK %s · %s", text, code, r.link(a))}
 	case "phone":
 		parts := []string{"Kardan alert", "Severity " + a.Severity, a.Title}
 		if a.Body != "" {
@@ -59,7 +60,7 @@ func (r Renderer) Render(channel string, a *alerting.Alert) Message {
 				fmt.Fprintf(&t, "%s: %s\n", f.Label, f.Value)
 			}
 		}
-		fmt.Fprintf(&t, "\nOpen in Kardan: %s\n", r.link(a))
+		fmt.Fprintf(&t, "\nOpen in Kardan: %s\nOr reply ACK %s to the SMS to acknowledge.\n", r.link(a), alerting.ShortCode(a.ID))
 
 		var h bytes.Buffer
 		_ = emailTemplate.Execute(&h, map[string]any{"A": a, "Link": r.link(a), "Hex": colorHex(a.Color)})

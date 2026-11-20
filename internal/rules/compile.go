@@ -88,14 +88,17 @@ func Compile(r Rule, defaultWindow time.Duration) (*Compiled, error) {
 		c.Fields = append(c.Fields, parseField(p))
 	}
 	for i, rt := range r.Routing {
-		if !strings.HasPrefix(rt.To, "team:") && !strings.HasPrefix(rt.To, "user:") {
-			return nil, wrap(fmt.Errorf("routing[%d].to %q must start with team: or user:", i, rt.To))
+		if !strings.HasPrefix(rt.To, "team:") && !strings.HasPrefix(rt.To, "user:") && !strings.HasPrefix(rt.To, "oncall:") {
+			return nil, wrap(fmt.Errorf("routing[%d].to %q must start with team:, oncall: or user:", i, rt.To))
+		}
+		if len(rt.Channels) == 0 {
+			return nil, wrap(fmt.Errorf("routing[%d]: channels are required (email, sms, phone, ui, preferences)", i))
 		}
 		for _, ch := range rt.Channels {
 			switch ch {
-			case "email", "sms", "phone", "ui":
+			case "email", "sms", "phone", "ui", "preferences":
 			default:
-				return nil, wrap(fmt.Errorf("routing[%d]: unknown channel %q (email, sms, phone, ui)", i, ch))
+				return nil, wrap(fmt.Errorf("routing[%d]: unknown channel %q (email, sms, phone, ui, preferences)", i, ch))
 			}
 		}
 	}
@@ -154,13 +157,18 @@ type Rendered struct {
 }
 
 type RenderedField struct {
-	Label string `json:"label"`
-	Value string `json:"value"`
+	Label     string `json:"label"`
+	Value     string `json:"value"`
+	Sensitive bool   `json:"sensitive,omitempty"` // masked on external channels
 }
 
-// Render applies the rule's presentation to an event.
-func (c *Compiled) Render(d *schema.Doc) Rendered {
-	get := d.Get
+// Render applies the rule's presentation to an event, unmasked.
+func (c *Compiled) Render(d *schema.Doc) Rendered { return c.RenderWith(d.Get, nil) }
+
+// RenderWith renders through a resolver, which is how channel-specific
+// masking is applied: the same rule produces the full alert for the UI and a
+// redacted one for SMS. sensitive, if set, flags fields to show with a lock.
+func (c *Compiled) RenderWith(get tmpl.Resolver, sensitive func(path string) bool) Rendered {
 	out := Rendered{
 		Title: strings.TrimSpace(c.title.Render(get)),
 		Body:  strings.TrimSpace(c.body.Render(get)),
@@ -174,7 +182,7 @@ func (c *Compiled) Render(d *schema.Doc) Rendered {
 		out.Color = colorFor(out.Severity)
 	}
 	for _, f := range c.Fields {
-		r := d.Get(f.Path)
+		r := get(f.Path)
 		if !r.Exists() {
 			continue
 		}
@@ -182,7 +190,11 @@ func (c *Compiled) Render(d *schema.Doc) Rendered {
 		if r.IsObject() || r.IsArray() {
 			v = r.Raw
 		}
-		out.Fields = append(out.Fields, RenderedField{Label: f.Label, Value: v})
+		rf := RenderedField{Label: f.Label, Value: v}
+		if sensitive != nil && sensitive(f.Path) {
+			rf.Sensitive = true
+		}
+		out.Fields = append(out.Fields, rf)
 	}
 	return out
 }

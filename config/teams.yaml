@@ -1,18 +1,71 @@
-# People and teams. Phone numbers use reserved fictional ranges; emails go to
-# Mailpit in the demo (http://localhost:8025).
+# People, teams, how and when to reach them, and who is on call.
+# Phone numbers use reserved fictional ranges; emails go to Mailpit
+# (http://localhost:8025), SMS and calls to the phone simulator
+# (http://localhost:8090). Changes apply live.
+
+# Used for "channels: [preferences]" when neither the person nor their team
+# sets preferences: critical -> phone + SMS, warning -> email, info -> UI only.
+defaultPreferences:
+  - { severity: critical, channels: [phone, sms] }
+  - { severity: warning,  channels: [email] }
+  - { severity: info,     channels: [ui] }
+
 people:
-  - { id: anna,  name: Anna Kowalska,   email: anna@example.com,  phone: "+44 7700 900101", timezone: Europe/London }
-  - { id: sam,   name: Sam Okafor,      email: sam@example.com,   phone: "+44 7700 900102", timezone: Europe/London }
-  - { id: maria, name: Maria Rossi,     email: maria@example.com, phone: "+44 7700 900103", timezone: Europe/London }
-  - { id: priya, name: Priya Raman,     email: priya@example.com, phone: "+1 212 555 0104", timezone: America/New_York }
-  - { id: lee,   name: Lee Chen,        email: lee@example.com,   phone: "+852 5550 0105",  timezone: Asia/Hong_Kong }
-  - { id: tom,   name: Tom Becker,      email: tom@example.com,   phone: "+49 30 5550106",  timezone: Europe/Berlin }
-  - { id: noah,  name: Noah Fischer,    email: noah@example.com,  phone: "+1 646 555 0107", timezone: America/New_York }
+  - id: anna
+    name: Anna Kowalska
+    email: anna@example.com
+    phone: "+44 7700 900101"
+    timezone: Europe/London
+    # Appendix A: critical alerts by SMS between 08:00 and 20:00, otherwise email.
+    preferences:
+      - { severity: critical, channels: [sms], between: "08:00-20:00" }
+      - { severity: critical, channels: [email] }
+      - { severity: warning,  channels: [email] }
+  - { id: sam,   name: Sam Okafor,   email: sam@example.com,   phone: "+44 7700 900102", timezone: Europe/London }
+  - { id: maria, name: Maria Rossi,  email: maria@example.com, phone: "+44 7700 900103", timezone: Europe/London }
+  - { id: priya, name: Priya Raman,  email: priya@example.com, phone: "+1 212 555 0104", timezone: America/New_York }
+  - { id: lee,   name: Lee Chen,     email: lee@example.com,   phone: "+852 5550 0105",  timezone: Asia/Hong_Kong }
+  - { id: tom,   name: Tom Becker,   email: tom@example.com,   phone: "+49 30 5550106",  timezone: Europe/Berlin }
+  - { id: noah,  name: Noah Fischer, email: noah@example.com,  phone: "+1 646 555 0107", timezone: America/New_York }
 
 teams:
-  - { id: settlements,          name: Settlements Operations, members: [sam, maria] }
-  - { id: pricing,              name: Pricing Engineering,    members: [lee] }
-  - { id: rates,                name: Rates Desk Support,     members: [priya] }
-  - { id: payments,             name: Payments Platform,      members: [anna, tom] }
-  - { id: counterparty-support, name: Counterparty Support,   members: [tom] }
-  - { id: etrading,             name: Electronic Trading,     members: [noah, lee] }
+  - id: settlements
+    name: Settlements Operations
+    members: [sam, maria]
+    onCall:
+      timezone: Europe/London
+      rotation: { every: week, start: "2026-11-02T09:00", people: [sam, maria] }
+
+  - id: pricing
+    name: Pricing Engineering
+    members: [lee]
+
+  - id: rates
+    name: Rates Desk Support
+    members: [priya]
+
+  - id: payments
+    name: Payments Platform
+    members: [anna, tom]
+    onCall:
+      timezone: Europe/London
+      rotation: { every: day, start: "2026-11-02T08:00", people: [anna, tom] }
+
+  - id: counterparty-support
+    name: Counterparty Support
+    members: [tom]
+
+  # Follow-the-sun: Hong Kong covers the Asian day, New York the American
+  # day; the weekly rotation covers the gap in between.
+  - id: etrading
+    name: Electronic Trading
+    members: [noah, lee]
+    preferences:
+      - { severity: error,   channels: [sms, email] }
+      - { severity: warning, channels: [email] }
+    onCall:
+      timezone: Europe/London
+      shifts:
+        - { person: lee,  between: "07:00-16:00" }   # Asia/Hong_Kong (Lee's time zone)
+        - { person: noah, between: "07:00-16:00" }   # America/New_York
+      rotation: { every: week, start: "2026-11-02T09:00", people: [noah, lee] }

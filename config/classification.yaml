@@ -1,0 +1,22 @@
+# What may appear in clear on each channel. Levels: public < internal < confidential.
+# A field above a channel's level is masked there ("****3000", "A. I. G.").
+# The UI is for authenticated staff; SMS lands on lock screens; calls are read aloud.
+channels:
+  ui: confidential
+  email: internal
+  sms: public
+  phone: public
+
+# Defaults by finance field type, as detected in each schema (see Schemas page).
+kinds:
+  iban: confidential
+  account: confidential
+  partyName: confidential
+  contact: confidential
+  lei: internal
+  counterparty: internal
+
+# Explicit paths win over the defaults. Globs: * within a segment, ** across segments.
+fields:
+  - { path: "member.name", level: confidential }
+  - { path: "client.**",   level: confidential }

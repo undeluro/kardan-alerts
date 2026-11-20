@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type SchemaNotice, type Team } from "./api";
+import { api, type ClockState, type SchemaNotice, type Team } from "./api";
 import { AlertsPage } from "./pages/AlertsPage";
+import { DeliveriesPage } from "./pages/DeliveriesPage";
+import { TeamsPage } from "./pages/TeamsPage";
 import { RuleEditor } from "./pages/RuleEditor";
 import { RulesPage } from "./pages/RulesPage";
 import { SchemaDetail } from "./pages/SchemaDetail";
@@ -32,6 +34,8 @@ const NAV = [
   { to: "/rules", label: "Rules", match: (p: string) => p.startsWith("/rules") },
   { to: "/schemas", label: "Schemas", match: (p: string) => p.startsWith("/schemas") },
   { to: "/sources", label: "Sources", match: (p: string) => p.startsWith("/sources") },
+  { to: "/deliveries", label: "Deliveries", match: (p: string) => p.startsWith("/deliveries") },
+  { to: "/teams", label: "Teams", match: (p: string) => p.startsWith("/teams") },
 ];
 
 export default function App() {
@@ -43,6 +47,15 @@ export default function App() {
   const [now, setNow] = useState(Date.now());
   const [toast, setToast] = useState<string | null>(null);
   const [schemaNotices, setSchemaNotices] = useState<SchemaNotice[]>([]);
+  const [clock, setClock] = useState<ClockState | null>(null);
+  const loadClock = useCallback(() => {
+    api.clock().then(setClock).catch(() => {});
+  }, []);
+  useEffect(() => {
+    loadClock();
+    const t = window.setInterval(loadClock, 15_000);
+    return () => window.clearInterval(t);
+  }, [loadClock]);
 
   const onSchema = useCallback((s: SchemaNotice) => {
     setSchemaNotices((prev) => [s, ...prev.filter((p) => p.id !== s.id)].slice(0, 3));
@@ -79,6 +92,8 @@ export default function App() {
   else if (path === "/schemas") page = <SchemasPage now={now} />;
   else if (schemaMatch) page = <SchemaDetail id={schemaMatch[1]} teams={teams} now={now} />;
   else if (path === "/sources") page = <SourcesPage now={now} />;
+  else if (path === "/deliveries") page = <DeliveriesPage now={now} onToast={showToast} />;
+  else if (path === "/teams") page = <TeamsPage onClockChange={loadClock} />;
   else if (path !== "/" && !alertId)
     page = (
       <div className="py-16 text-center">
@@ -150,6 +165,15 @@ export default function App() {
             </select>
           )}
           <LiveIndicator connection={connection} />
+          {clock && clock.offsetMinutes !== 0 && (
+            <Link
+              to="/teams"
+              className="rounded-md bg-amber-100 px-2 py-1 text-xs font-medium text-amber-900 dark:bg-amber-500/20 dark:text-amber-200"
+              title="The business clock is shifted for the demo"
+            >
+              ⏱ simulated {new Date(clock.now).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}
+            </Link>
+          )}
           <div className="ml-auto flex items-center gap-2">
             <label htmlFor="actor" className="text-xs text-gray-500">
               Acting as

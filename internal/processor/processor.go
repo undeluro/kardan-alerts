@@ -8,17 +8,22 @@ import (
 	"encoding/json"
 	"log/slog"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/tidwall/gjson"
 	"github.com/twmb/franz-go/pkg/kgo"
 
 	"github.com/undeluro/kardan-alerts/internal/alerting"
 	"github.com/undeluro/kardan-alerts/internal/directory"
 	"github.com/undeluro/kardan-alerts/internal/event"
 	"github.com/undeluro/kardan-alerts/internal/notify"
+	"github.com/undeluro/kardan-alerts/internal/platform/clock"
 	"github.com/undeluro/kardan-alerts/internal/platform/metrics"
+	"github.com/undeluro/kardan-alerts/internal/privacy"
 	"github.com/undeluro/kardan-alerts/internal/rules"
 	"github.com/undeluro/kardan-alerts/internal/schema"
 )
@@ -28,6 +33,9 @@ type Processor struct {
 	Pool      *pgxpool.Pool
 	Engine    *rules.Engine
 	Directory func() *directory.Directory
+	Privacy   func() *privacy.Policy
+	Clock     *clock.Clock      // business time for working hours and on-call
+	Fallbacks map[string]string // channel -> fallback channel, e.g. sms -> email
 	Renderer  notify.Renderer
 	Publisher *alerting.Publisher
 	Schemas   *schema.Registry
@@ -91,6 +99,7 @@ type group struct {
 	rule     *rules.Compiled
 	fp       string
 	first    *schema.Doc
+	kinds    map[string]string // detected finance kind per field of the first event's schema
 	rendered rules.Rendered
 	count    int64
 	firstAt  time.Time
@@ -133,8 +142,10 @@ func (p *Processor) processBatch(ctx context.Context, recs []*kgo.Record) error 
 			fp := c.Fingerprint(doc)
 			g := groups[fp]
 			if g == nil {
-				g = &group{rule: c, fp: fp, first: doc, rendered: c.Render(doc), firstAt: env.ReceivedAt,
-					recvAt: env.ReceivedAt}
+				kinds := p.Schemas.Kinds(sig)
+				classify := p.classifier(doc, kinds)
+				g = &group{rule: c, fp: fp, first: doc, kinds: kinds, firstAt: env.ReceivedAt, recvAt: env.ReceivedAt,
+					rendered: c.RenderWith(doc.Get, func(path string) bool { return classify(path) > privacy.Public })}
 				groups[fp] = g
 			}
 			g.count++
@@ -193,6 +204,7 @@ func (p *Processor) processBatch(ctx context.Context, recs []*kgo.Record) error 
 		}
 		var outbox []alerting.Notification
 		dir := p.Directory()
+		now := p.Clock.Now()
 		for i, res := range results {
 			g := ordered[i]
 			if !res.Inserted {
@@ -203,7 +215,7 @@ func (p *Processor) processBatch(ctx context.Context, recs []*kgo.Record) error 
 			a := inputs[i].Alert
 			a.ID, a.Count, a.LastSeen = res.ID, res.Count, res.LastSeen
 			a.CreatedAt, a.UpdatedAt = time.Now(), time.Now()
-			outbox = append(outbox, p.notificationsFor(&a, g, dir)...)
+			outbox = append(outbox, p.notificationsFor(&a, g, dir, now)...)
 			alertCopy := a
 			updates = append(updates, alerting.Update{Kind: "created", Team: a.Team, Alert: &alertCopy,
 				ReceivedAt: g.recvAt})
@@ -270,45 +282,130 @@ func (p *Processor) recordSchemas(ctx context.Context, observed map[string]*sche
 	}
 }
 
+type delivery struct {
+	person  directory.Person
+	channel string
+	reason  string
+}
+
 // notificationsFor expands the rule's routes into one outbox row per
-// (person, channel). "ui" needs no row: the live feed shows every alert.
-func (p *Processor) notificationsFor(a *alerting.Alert, g *group, dir *directory.Directory) []alerting.Notification {
-	var out []alerting.Notification
+// (person, channel):
+//   - targets: team members, the on-call person (rotation / follow-the-sun),
+//     or a named person, resolved at the business clock's "now";
+//   - channels: explicit, or "preferences" (severity + working hours of each
+//     recipient, in their time zone);
+//   - each message is rendered with the masking its channel requires;
+//   - a fallback channel is rendered too and parked as standby, so if the
+//     primary channel fails the dispatcher can switch without re-rendering.
+//
+// "ui" needs no row: the live feed shows every alert.
+func (p *Processor) notificationsFor(a *alerting.Alert, g *group, dir *directory.Directory, now time.Time) []alerting.Notification {
+	var plan []delivery
 	seen := map[string]bool{}
+	add := func(d delivery) {
+		key := d.person.ID + "|" + d.channel
+		if d.channel == "ui" || seen[key] {
+			return
+		}
+		seen[key] = true
+		plan = append(plan, d)
+	}
 	for _, route := range g.rule.Rule.Routing {
-		people := dir.Resolve(route.To)
+		people, why := dir.Resolve(route.To, now)
 		if len(people) == 0 {
 			p.Log.Warn("route target resolves to nobody", "rule", a.RuleID, "to", route.To)
 		}
 		for _, person := range people {
 			for _, ch := range route.Channels {
-				if ch == "ui" {
+				if ch != "preferences" {
+					add(delivery{person, ch, join(why, "rule routes "+ch)})
 					continue
 				}
-				key := person.ID + "|" + ch
-				if seen[key] {
-					continue
+				chs, prefWhy := dir.ChannelsFor(person, a.Team, a.Severity, now)
+				for _, c := range chs {
+					add(delivery{person, c, join(why, prefWhy)})
 				}
-				seen[key] = true
-				addr := person.Address(ch)
-				if addr == "" {
-					p.Log.Warn("recipient has no address for channel", "person", person.ID, "channel", ch)
-					continue
-				}
-				msg := p.Renderer.Render(ch, a)
-				out = append(out, alerting.Notification{
-					ID:              event.NewID(),
-					AlertID:         a.ID,
-					Recipient:       person.ID,
-					Channel:         ch,
-					Address:         addr,
-					Subject:         msg.Subject,
-					BodyText:        msg.BodyText,
-					BodyHTML:        msg.BodyHTML,
-					EventReceivedAt: g.recvAt,
-				})
 			}
 		}
 	}
+
+	pol := p.Privacy()
+	classify := p.classifier(g.first, g.kinds)
+	masked := map[privacy.Level]*alerting.Alert{}
+	render := func(channel string) notify.Message {
+		lvl := pol.ChannelLevel(channel)
+		ma, ok := masked[lvl]
+		if !ok {
+			get := func(path string) gjson.Result {
+				r := g.first.Get(path)
+				if r.Exists() && classify(path) > lvl {
+					m := privacy.Mask(r.String())
+					return gjson.Result{Type: gjson.String, Str: m, Raw: strconv.Quote(m)}
+				}
+				return r
+			}
+			pres := g.rule.RenderWith(get, nil)
+			cp := *a
+			cp.Title, cp.Body, cp.Fields = pres.Title, pres.Body, pres.Fields
+			ma = &cp
+			masked[lvl] = ma
+		}
+		return p.Renderer.Render(channel, ma)
+	}
+
+	var out []alerting.Notification
+	for _, d := range plan {
+		addr := d.person.Address(d.channel)
+		if addr == "" {
+			p.Log.Warn("recipient has no address for channel", "person", d.person.ID, "channel", d.channel)
+			continue
+		}
+		msg := render(d.channel)
+		primary := alerting.Notification{
+			ID: event.NewID(), AlertID: a.ID, Recipient: d.person.ID, Channel: d.channel, Address: addr,
+			Subject: msg.Subject, BodyText: msg.BodyText, BodyHTML: msg.BodyHTML, EventReceivedAt: g.recvAt,
+			Reason: d.reason,
+		}
+		out = append(out, primary)
+
+		fb := p.Fallbacks[d.channel]
+		if fb == "" || seen[d.person.ID+"|"+fb] {
+			continue // no fallback, or the person already gets that channel
+		}
+		if fbAddr := d.person.Address(fb); fbAddr != "" {
+			fm := render(fb)
+			out = append(out, alerting.Notification{
+				ID: event.NewID(), AlertID: a.ID, Recipient: d.person.ID, Channel: fb, Address: fbAddr,
+				Subject: fm.Subject, BodyText: fm.BodyText, BodyHTML: fm.BodyHTML, EventReceivedAt: g.recvAt,
+				Status: "standby", FallbackFor: primary.ID, Reason: "fallback if " + d.channel + " fails",
+			})
+		}
+	}
 	return out
+}
+
+// classifier returns the privacy level of a field for this event, using the
+// facet mapping (so $account resolves to the real path) and the finance kinds
+// detected for its schema.
+func (p *Processor) classifier(doc *schema.Doc, kinds map[string]string) func(path string) privacy.Level {
+	pol := p.Privacy()
+	return func(path string) privacy.Level {
+		resolved := path
+		if strings.HasPrefix(path, "$") {
+			if o, ok := doc.Overrides[path]; ok && o != "" {
+				resolved = o
+			}
+		}
+		return pol.LevelOf(resolved, kinds[resolved], doc.Get(path))
+	}
+}
+
+func join(a, b string) string {
+	switch {
+	case a == "":
+		return b
+	case b == "":
+		return a
+	}
+	return a + "; " + b
 }

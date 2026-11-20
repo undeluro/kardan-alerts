@@ -4,9 +4,9 @@
 prefer, without flooding them, for trading, settlement and payments operations. It accepts events of *any* shape
 from any source, and teams decide what reaches them with rules they edit as data, not code.
 
-> Hackathon 2026 — *Flexible Alerting & Notification Service*. Status: **Milestones 1–3 done** (end-to-end
+> Hackathon 2026 — *Flexible Alerting & Notification Service*. Status: **Milestones 1–4 done** (end-to-end
 > slice; Kafka, log-file, FIX and ISO 20022 sources; schema registry with finance field detection; live rule
-> editing). See [Roadmap](#roadmap) for what is next.
+> editing; reliable delivery with on-call, preferences, masking, circuit breakers and fallbacks). See [Roadmap](#roadmap) for what is next.
 
 ## Quick start
 
@@ -25,8 +25,9 @@ and tailed log files (regex-parsed pricing logs, a FIX engine log).
 | Live alert feed (UI)     | http://localhost:8080                                         |
 | Rules, schemas, sources  | http://localhost:8080/rules · /schemas · /sources             |
 | Every email sent         | http://localhost:8025 (Mailpit)                               |
+| SMS and calls            | http://localhost:8090 (phone simulator: reply, answer, inject provider failures) |
+| Deliveries, on-call      | http://localhost:8080/deliveries · /teams                     |
 | Prometheus metrics       | http://localhost:8080/metrics                                 |
-| SMS / phone (simulated)  | `docker compose logs worker \| grep "simulated delivery"`      |
 
 Scale the workers horizontally: `docker compose up -d --scale worker=3`.
 
@@ -75,8 +76,33 @@ Scale the workers horizontally: `docker compose up -d --scale worker=3`.
   - Alerts and their notifications are committed in one transaction (transactional outbox).
   - Delivery retries with exponential backoff and jitter, and dead-letters only after `MAX_ATTEMPTS`.
   - Tested: stop Mailpit, send an alert, start Mailpit → it is delivered on the next retry.
-- **Live UI.** A server-sent-events feed per team (push, no refresh), ack/resolve, a detail drawer with delivery
-  status per channel and the raw payload. Dark mode follows the OS.
+- **Right person, right channel, right time.**
+  - Routes target a team, **whoever is on call** (weekly or daily rotation, follow-the-sun shifts across time
+    zones, holiday overrides), or a person.
+  - Channels can be fixed or `preferences`: each person's severity → channel rules with working hours in their
+    own time zone. Anna's "SMS 08:00–20:00, otherwise email" from the brief is literally her preference.
+  - Every delivery records why it went to that person on that channel.
+- **Replies close the loop.**
+  - Replying `ACK K7Q2` or `RESOLVE K7Q2` to an SMS, or pressing 1 on an alert call, acknowledges or resolves the
+    alert as that person.
+  - Inbound webhooks are authenticated, so a forged message cannot silence an alert.
+- **Masking per channel.**
+  - Fields are classified as public, internal or confidential: by detected finance kind (IBAN, party names,
+    contact details…), by explicit paths in `config/classification.yaml`, and by value (anything IBAN-shaped).
+  - SMS and calls get public data only, email internal, the UI everything (sensitive fields show a 🔒).
+  - A payment rejection email reads `Debtor: A. I. G. · IBAN ****3000`.
+- **Delivery that survives provider outages.**
+  - Each channel has a circuit breaker: after 5 consecutive failures it opens, and deliveries wait without
+    burning their retry budget.
+  - A parked fallback (phone → SMS → email, pre-rendered with the right masking) is activated after 3 failed
+    attempts or 30 s undelivered, and cancelled if the primary gets through.
+  - Permanent errors (bad number) go straight to dead letters, which can be re-sent from the Deliveries page.
+  - Tested: provider down → fallback email in 3 s → breakers open → provider back → probe, close, backlog
+    delivered, nothing lost.
+- **Live UI.** A server-sent-events feed per team (push, no refresh), ack/resolve, and a detail drawer with each
+  delivery's channel, recipient, reason, fallbacks and the raw payload. The Deliveries page shows channel health
+  and breaker state, the Teams page shows on-call now. In demo mode a shared business clock lets you jump to
+  21:00 or next week to show schedules. Dark mode follows the OS.
 - **Horizontal scaling by role.** One binary, `ROLES=api,ingest,processor,dispatcher` in any mix. The workers are
   stateless; state lives in Postgres (alerts, outbox), Redis (live fan-out) and Redpanda (durable event log).
 
@@ -103,6 +129,8 @@ Scale the workers horizontally: `docker compose up -d --scale worker=3`.
 | Live updates on any replica | Redis pub/sub fan-out; clients re-sync from REST on reconnect |
 | Config changes on every replica | Redis notice + config-dir poll + DB version check; atomic rule-set swap |
 | Tailing a file from many replicas | Redis lease per file source; others stand by and take over |
+| SMS / voice provider outage | Per-channel circuit breaker, deferred retries, standby fallback channel, dead letters + re-send |
+| Duplicate sends to the provider | Notification id sent as `Idempotency-Key`; claims sized to free workers so leases never lapse |
 
 ## Writing a rule
 
@@ -148,6 +176,11 @@ Template filters: `number`, `upper`, `lower`, `default "x"`, `truncate N`, `json
 | GET | `/api/schemas` · `/api/schemas/{id}` | catalogue, fields, finance detection, facet values |
 | PUT | `/api/schemas/{id}` | rename, set facet mappings `{"facets": {"$severity": "criticity"}}` |
 | GET | `/api/sources` | configured sources with live status |
+| GET | `/api/deliveries?status=queued\|dead\|sent&channel=` | outbox with reasons and fallbacks |
+| POST | `/api/notifications/{id}/resend` | re-queue a dead or waiting delivery |
+| GET | `/api/channels` | per-channel health, latency and circuit-breaker state |
+| GET | `/api/oncall` · GET/PUT `/api/clock` | who is on call now · business clock (demo mode) |
+| POST | `/inbound/sms` · `/inbound/call` | provider webhooks for replies and keypad presses (token required) |
 | GET | `/api/teams` · `/api/stats` · `/api/info` | directory, counters, facets, operators, config errors |
 
 ## Development
@@ -166,7 +199,7 @@ Configuration is through environment variables with working defaults; see `inter
 | Real system | Here |
 |---|---|
 | SMTP provider | Mailpit (real SMTP, captured) |
-| SMS / phone gateway | Logged by the dispatcher (a fake gateway with a phone-simulator UI arrives in M4) |
+| SMS / voice provider | `cmd/fakegw`: same contract as a real provider (HTTP API, idempotency keys, inbound reply webhooks), with a phone simulator and failure injection. A real provider is one more `notify.Channel` |
 | Kafka | Redpanda (Kafka API compatible, single node) |
 | Authentication / SSO | None yet: actions record a free-text "acting as" name (entitlements: M7) |
 
@@ -176,8 +209,8 @@ Configuration is through environment variables with working defaults; see `inter
 2. ~~Vertical slice: HTTP ingest → rules → dedup → alerts → live feed → email~~ ✔
 3. ~~Kafka, file-tail, FIX and ISO 20022 sources; schema registry with finance field detection; rule CRUD with hot
    reload~~ ✔
-4. Fake SMS/phone gateway; preferences with working hours and follow-the-sun on-call; masking per channel;
-   circuit breakers
+4. ~~Fake SMS/phone gateway; preferences with working hours and follow-the-sun on-call; masking per channel;
+   circuit breakers~~ ✔
 5. Grouping digests, throttling, auto-resolve, FX-normalised dollar impact, incident correlation
 6. `aggregate` and `absence` rules, market calendars and cut-off countdowns
 7. Runbooks (YAML / Markdown / free text) with actions, four-eyes approvals and a hash-chained audit trail

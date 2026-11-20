@@ -44,7 +44,14 @@ export function AlertCard({ alert: a, flash, now, busy, onOpen, onAck, onResolve
             <dl className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-xs">
               {a.fields.slice(0, 5).map((f) => (
                 <div key={f.label} className="flex min-w-0 gap-1.5">
-                  <dt className="text-gray-500 dark:text-gray-400">{f.label}</dt>
+                  <dt className="text-gray-500 dark:text-gray-400">
+                    {f.sensitive && (
+                      <span title="Sensitive: masked on SMS, calls and email" className="mr-0.5">
+                        🔒
+                      </span>
+                    )}
+                    {f.label}
+                  </dt>
                   <dd className="truncate font-mono text-gray-800 dark:text-gray-200" title={f.value}>
                     {f.value}
                   </dd>

@@ -18,6 +18,7 @@ import (
 	"github.com/undeluro/kardan-alerts/internal/directory"
 	"github.com/undeluro/kardan-alerts/internal/ingest"
 	"github.com/undeluro/kardan-alerts/internal/platform/bus"
+	"github.com/undeluro/kardan-alerts/internal/privacy"
 	"github.com/undeluro/kardan-alerts/internal/rules"
 	"github.com/undeluro/kardan-alerts/internal/schema"
 )
@@ -38,7 +39,8 @@ type Reloader struct {
 	Redis     *redis.Client
 	Log       *slog.Logger
 
-	dir atomic.Pointer[directory.Directory]
+	dir     atomic.Pointer[directory.Directory]
+	privacy atomic.Pointer[privacy.Policy]
 
 	mu        sync.Mutex
 	fileRules []rules.Rule
@@ -49,6 +51,7 @@ type Reloader struct {
 }
 
 func (r *Reloader) Directory() *directory.Directory { return r.dir.Load() }
+func (r *Reloader) Privacy() *privacy.Policy        { return r.privacy.Load() }
 
 // Errors lists current configuration problems (bad YAML, invalid rules).
 func (r *Reloader) Errors() []string {
@@ -71,6 +74,11 @@ func (r *Reloader) LoadAll(ctx context.Context) error {
 		return fmt.Errorf("load teams: %w", err)
 	}
 	r.dir.Store(d)
+	pol, err := privacy.Load(filepath.Join(r.ConfigDir, "classification.yaml"))
+	if err != nil {
+		return fmt.Errorf("load classification: %w", err)
+	}
+	r.privacy.Store(pol)
 	r.loadFileRules()
 	if err := r.rebuildRules(ctx); err != nil {
 		return err
@@ -145,6 +153,17 @@ func (r *Reloader) reloadFiles(ctx context.Context) {
 		r.dir.Store(d)
 		r.mu.Lock()
 		delete(r.errors, "teams.yaml")
+		r.mu.Unlock()
+	}
+	if pol, err := privacy.Load(filepath.Join(r.ConfigDir, "classification.yaml")); err != nil {
+		r.Log.Error("classification.yaml invalid, keeping previous version", "err", err)
+		r.mu.Lock()
+		r.errors["classification.yaml"] = err.Error()
+		r.mu.Unlock()
+	} else {
+		r.privacy.Store(pol)
+		r.mu.Lock()
+		delete(r.errors, "classification.yaml")
 		r.mu.Unlock()
 	}
 	r.loadFileRules()

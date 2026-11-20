@@ -1,6 +1,7 @@
 # Team Settlements: any WORKFLOW_FAILED where workflowName = order-settlement
 # and environment = prod -> phone the on-call person + SMS; show the step and
-# the error message in red in the UI.
+# the error message in red in the UI. The on-call person comes from the
+# team's rotation in teams.yaml.
 id: settlements-order-settlement-failed
 name: Order settlement workflow failed (prod)
 team: settlements
@@ -10,7 +11,8 @@ match:
     - { field: workflowName, op: eq, value: order-settlement }
     - { field: environment,  op: eq, value: prod }
 routing:
-  - { to: team:settlements, channels: [phone, sms, ui] }
+  - { to: oncall:settlements, channels: [phone, sms] }
+  - { to: team:settlements,   channels: [ui] }
 presentation:
   title: "Settlement {{workflowId}} failed at {{step}}"
   body: "{{error.code}}: {{error.message}}"

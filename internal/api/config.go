@@ -62,7 +62,7 @@ func (s *Server) validateRule(rule rules.Rule) error {
 		return fmt.Errorf("unknown team %q", rule.Team)
 	}
 	for i, rt := range rule.Routing {
-		if len(dir.Resolve(rt.To)) == 0 {
+		if !dir.Exists(rt.To) {
 			return fmt.Errorf("routing[%d].to %q matches no known team or person", i, rt.To)
 		}
 	}

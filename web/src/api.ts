@@ -3,6 +3,7 @@ export type Status = "open" | "acked" | "resolved";
 export interface AlertField {
   label: string;
   value: string;
+  sensitive?: boolean;
 }
 
 export interface Alert {
@@ -36,12 +37,14 @@ export interface Alert {
 export interface Notification {
   id: string;
   alertId: string;
+  fallbackFor?: string;
+  reason?: string;
   recipient: string;
   channel: string;
   address: string;
   subject: string;
   bodyText: string;
-  status: "pending" | "sending" | "sent" | "retry" | "dead";
+  status: "pending" | "sending" | "sent" | "retry" | "dead" | "standby" | "cancelled";
   attempts: number;
   nextAttemptAt: string;
   lastError?: string;
@@ -70,10 +73,26 @@ export interface Update {
   schema?: SchemaNotice;
 }
 
+export interface Preference {
+  severity?: string;
+  channels: string[];
+  between?: string;
+  days?: string;
+}
+
+export interface OnCallConfig {
+  timezone?: string;
+  rotation?: { every: string; start: string; people: string[] };
+  shifts?: { person: string; between?: string; days?: string; timezone?: string }[];
+  overrides?: { person: string; from: string; to: string }[];
+}
+
 export interface Team {
   id: string;
   name: string;
   members: string[];
+  preferences?: Preference[];
+  onCall?: OnCallConfig;
 }
 
 export interface Person {
@@ -82,6 +101,38 @@ export interface Person {
   email?: string;
   phone?: string;
   timezone?: string;
+  preferences?: Preference[];
+}
+
+export interface OnCallNow {
+  team: string;
+  person: Person;
+  reason: string;
+}
+
+export interface ClockState {
+  now: string;
+  offsetMinutes: number;
+  demoMode: boolean;
+}
+
+export interface Delivery extends Notification {
+  alertTitle: string;
+  alertTeam: string;
+  alertSeverity: string;
+}
+
+export interface ChannelView {
+  channel: string;
+  provider: string;
+  breaker: "closed" | "half-open" | "open";
+  sent: number;
+  queued: number;
+  retrying: number;
+  dead: number;
+  p50Ms: number;
+  p99Ms: number;
+  lastError?: string;
 }
 
 export interface Stats {
@@ -182,6 +233,9 @@ export interface Info {
   facets: string[];
   ops: string[];
   configErrors: string[];
+  gatewayUrl?: string;
+  mailUrl?: string;
+  demoMode?: boolean;
 }
 
 export class ApiError extends Error {
@@ -237,7 +291,13 @@ export const api = {
   alert: (id: string) => request<{ alert: Alert; notifications: Notification[] }>("GET", `/api/alerts/${id}`),
   ack: (id: string, by: string) => request<Alert>("POST", `/api/alerts/${id}/ack`, { by }),
   resolve: (id: string, by: string) => request<Alert>("POST", `/api/alerts/${id}/resolve`, { by }),
-  teams: () => request<{ teams: Team[]; people: Person[] }>("GET", "/api/teams"),
+  teams: () => request<{ teams: Team[]; people: Person[]; defaultPreferences: Preference[] | null }>("GET", "/api/teams"),
+  onCall: () => request<{ now: string; onCall: OnCallNow[] }>("GET", "/api/oncall"),
+  clock: () => request<ClockState>("GET", "/api/clock"),
+  setClock: (offsetMinutes: number) => request<ClockState>("PUT", "/api/clock", { offsetMinutes }),
+  deliveries: (status: string, channel: string) => request<Delivery[]>("GET", `/api/deliveries${qs({ status, channel })}`),
+  resend: (id: string) => request<void>("POST", `/api/notifications/${id}/resend`),
+  channels: () => request<ChannelView[]>("GET", "/api/channels"),
   stats: (team: string) => request<Stats>("GET", `/api/stats${qs({ team })}`),
   streamURL: (team: string) => `/api/stream${qs({ team })}`,
 

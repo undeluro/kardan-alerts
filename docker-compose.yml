@@ -2,6 +2,7 @@
 #
 #   UI + API ...... http://localhost:8080
 #   Mailpit ....... http://localhost:8025   (every email the service sends)
+#   Phones ........ http://localhost:8090   (SMS / voice gateway simulator, failure injection)
 #   Metrics ....... http://localhost:8080/metrics
 #
 # Scale the workers horizontally:  docker compose up -d --scale worker=3
@@ -16,6 +17,10 @@ x-kardan: &kardan
     KAFKA_BROKERS: redpanda:9092
     SMTP_ADDR: mailpit:1025
     PUBLIC_URL: http://localhost:8080
+    GATEWAY_URL: http://gateway:8090
+    GATEWAY_PUBLIC_URL: http://localhost:8090
+    GATEWAY_TOKEN: dev-gateway-token # shared secret for SMS/voice calls and inbound replies
+    DEMO_MODE: "true"                # allows shifting the business clock from the Teams page
   volumes:
     - ./config:/app/config:ro # edit rules/teams without rebuilding
   depends_on:
@@ -46,6 +51,25 @@ services:
     environment:
       <<: *kardan-env
       ROLES: processor,dispatcher
+
+  # Simulated SMS / voice provider with a phone simulator page.
+  gateway:
+    image: kardan:dev
+    pull_policy: never
+    restart: unless-stopped
+    entrypoint: ["fakegw"]
+    healthcheck:
+      test: ["CMD", "fakegw", "healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    environment:
+      KARDAN_URL: http://api:8080
+      GATEWAY_TOKEN: dev-gateway-token
+    ports:
+      - "8090:8090"
+    depends_on:
+      api: { condition: service_started }
 
   redpanda:
     image: redpandadata/redpanda:v25.1.1

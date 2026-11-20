@@ -293,6 +293,18 @@ kardan-alerts/
 - **Schema auto-facets are recomputed on read** from stored fields, so detection improvements apply to old schemas.
 - File sources are leased per source in Redis (one tailing replica, fail-over within the lease TTL).
 
+## Implementation notes (M4)
+
+- **Fallbacks are pre-rendered as `standby` outbox rows** in the alert's transaction (the processor has the
+  payload and schema needed for masking); the dispatcher only flips them to `pending` or `cancelled`.
+- **An open breaker defers without spending attempts**, so a long provider outage cannot exhaust the retry
+  budget; fallback activation also triggers on age (30 s), not just attempt count.
+- **Business clock vs real clock:** preferences and on-call use a shiftable clock (demo mode, pushed to all
+  replicas over Redis); latency, leases and retries always use real time.
+- **The fake gateway is a separate binary in the same image** and reads `GATEWAY_ADDR`, not `HTTP_ADDR`, which
+  the image sets for Kardan.
+- Masking: explicit path rules > detected finance kind > value patterns (IBAN, email).
+
 ## Milestones
 
 1. **Skeleton** — go.mod, compose (redpanda, postgres, redis, mailpit), role switch, migrations, React scaffold

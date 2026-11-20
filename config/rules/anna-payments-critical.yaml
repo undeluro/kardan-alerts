@@ -1,6 +1,6 @@
 # Anna (personal): anything critical from payments-api -> SMS between 08:00 and
-# 20:00, otherwise email. (Time-window preferences arrive in M4; until then
-# both channels are used.)
+# 20:00, otherwise email. The time window lives in Anna's preferences in
+# teams.yaml (her time zone), so the rule only says "use her preferences".
 id: anna-payments-critical
 name: Anna — critical payments-api alerts
 team: payments
@@ -9,7 +9,7 @@ match:
     - { field: $severity, op: eq, value: critical }
     - { field: $service,  op: eq, value: payments-api }
 routing:
-  - { to: user:anna, channels: [sms, email, ui] }
+  - { to: user:anna, channels: [preferences, ui] }
 presentation:
   title: "{{$type}} on {{$service}}"
   body: "{{annotations.summary}}"

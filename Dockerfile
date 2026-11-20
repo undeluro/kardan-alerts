@@ -19,12 +19,13 @@ COPY --from=web /src/web/dist ./web/dist
 ARG VERSION=dev
 RUN --mount=type=cache,target=/go/pkg/mod --mount=type=cache,target=/root/.cache/go-build \
     go build -trimpath -ldflags="-s -w -X github.com/undeluro/kardan-alerts/internal/app.Version=${VERSION}" \
-      -o /out/kardan ./cmd/kardan
+      -o /out/kardan ./cmd/kardan && \
+    go build -trimpath -ldflags="-s -w" -o /out/fakegw ./cmd/fakegw
 
 # ---- runtime: no shell, no package manager, non-root ---------------------------
 FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
-COPY --from=build /out/kardan /usr/local/bin/kardan
+COPY --from=build /out/kardan /out/fakegw /usr/local/bin/
 COPY config /app/config
 ENV CONFIG_DIR=/app/config HTTP_ADDR=:8080
 EXPOSE 8080

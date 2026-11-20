@@ -68,6 +68,16 @@ var (
 		Buckets: latencyBuckets,
 	}, []string{"channel"})
 
+	ChannelState = promauto.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "kardan_channel_breaker_state",
+		Help: "Circuit breaker state per channel on this replica: 0 closed, 1 half-open, 2 open.",
+	}, []string{"channel"})
+
+	InboundReplies = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "kardan_inbound_replies_total",
+		Help: "Replies received from SMS / phone, by channel and outcome.",
+	}, []string{"channel", "outcome"})
+
 	SSEClients = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "kardan_sse_clients",
 		Help: "Connected live-feed clients on this replica.",

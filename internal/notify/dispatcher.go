@@ -25,8 +25,11 @@ type Dispatcher struct {
 	MaxAttempts int
 	Log         *slog.Logger
 
-	BatchSize int
-	Lease     time.Duration
+	BatchSize     int
+	Lease         time.Duration
+	OpenFor       time.Duration // how long to wait when a channel's breaker is open
+	FallbackAfter int           // failed attempts before the fallback channel is used
+	FallbackDelay time.Duration // or: time undelivered before the fallback is used
 }
 
 func (d *Dispatcher) Run(ctx context.Context) error {
@@ -35,6 +38,15 @@ func (d *Dispatcher) Run(ctx context.Context) error {
 	}
 	if d.Lease == 0 {
 		d.Lease = 30 * time.Second
+	}
+	if d.OpenFor == 0 {
+		d.OpenFor = 15 * time.Second
+	}
+	if d.FallbackAfter == 0 {
+		d.FallbackAfter = 3
+	}
+	if d.FallbackDelay == 0 {
+		d.FallbackDelay = 30 * time.Second
 	}
 	wake := make(chan struct{}, 1)
 	go d.listen(ctx, wake)
@@ -130,7 +142,7 @@ func (d *Dispatcher) claim(ctx context.Context, limit int) ([]alerting.Notificat
 		    LIMIT $1
 		    FOR UPDATE SKIP LOCKED)
 		RETURNING n.id, n.alert_id, n.recipient, n.channel, n.address, n.subject, n.body_text, n.body_html,
-		          n.attempts, n.event_received_at`, limit, d.Lease.String())
+		          n.attempts, n.event_received_at, n.created_at`, limit, d.Lease.String())
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +151,7 @@ func (d *Dispatcher) claim(ctx context.Context, limit int) ([]alerting.Notificat
 	for rows.Next() {
 		var n alerting.Notification
 		if err := rows.Scan(&n.ID, &n.AlertID, &n.Recipient, &n.Channel, &n.Address, &n.Subject, &n.BodyText,
-			&n.BodyHTML, &n.Attempts, &n.EventReceivedAt); err != nil {
+			&n.BodyHTML, &n.Attempts, &n.EventReceivedAt, &n.CreatedAt); err != nil {
 			return nil, err
 		}
 		out = append(out, n)
@@ -151,7 +163,7 @@ func (d *Dispatcher) deliver(ctx context.Context, n alerting.Notification) {
 	ch, ok := d.Channels[n.Channel]
 	var err error
 	if !ok {
-		err = errors.New("no channel registered for " + n.Channel)
+		err = &PermanentError{errors.New("no channel registered for " + n.Channel)}
 	} else {
 		sendCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 		err = ch.Send(sendCtx, n)
@@ -160,33 +172,70 @@ func (d *Dispatcher) deliver(ctx context.Context, n alerting.Notification) {
 	if ctx.Err() != nil {
 		return // shutting down; the lease expires and another dispatcher retries
 	}
-	if err == nil {
+	log := d.Log.With("id", n.ID, "channel", n.Channel, "to", n.Recipient, "attempt", n.Attempts)
+
+	switch {
+	case err == nil:
 		metrics.NotificationsSent.WithLabelValues(n.Channel, "sent").Inc()
 		metrics.EndToEndLatency.WithLabelValues(n.Channel).Observe(time.Since(n.EventReceivedAt).Seconds())
-		if _, uerr := d.Pool.Exec(ctx, `
-			UPDATE notifications SET status = 'sent', sent_at = now(), locked_until = NULL, last_error = ''
-			WHERE id = $1`, n.ID); uerr != nil {
-			d.Log.Error("mark sent", "id", n.ID, "err", uerr)
-		}
-		return
-	}
+		d.exec(ctx, `UPDATE notifications SET status = 'sent', sent_at = now(), locked_until = NULL, last_error = ''
+			WHERE id = $1`, n.ID)
+		// The primary got through: parked fallbacks are no longer needed.
+		d.exec(ctx, `UPDATE notifications SET status = 'cancelled' WHERE fallback_for = $1 AND status = 'standby'`, n.ID)
 
-	if n.Attempts >= d.MaxAttempts {
+	case IsOpen(err):
+		// The channel is known to be down. Wait for the breaker's next probe
+		// without spending this delivery's retry budget.
+		metrics.NotificationsSent.WithLabelValues(n.Channel, "deferred").Inc()
+		wait := d.OpenFor
+		d.exec(ctx, `UPDATE notifications SET status = 'retry', attempts = greatest(attempts - 1, 0), locked_until = NULL,
+			last_error = $2, next_attempt_at = now() + $3::interval WHERE id = $1`,
+			n.ID, n.Channel+" channel unavailable (circuit open), waiting for it to recover", wait.String())
+		d.maybeFallback(ctx, n, log)
+
+	case IsPermanent(err) || n.Attempts >= d.MaxAttempts:
 		metrics.NotificationsSent.WithLabelValues(n.Channel, "dead").Inc()
-		d.Log.Error("delivery failed permanently", "id", n.ID, "channel", n.Channel, "attempts", n.Attempts, "err", err)
-		_, _ = d.Pool.Exec(ctx, `
-			UPDATE notifications SET status = 'dead', locked_until = NULL, last_error = $2 WHERE id = $1`,
+		log.Error("delivery failed for good, moved to dead letters", "err", err)
+		d.exec(ctx, `UPDATE notifications SET status = 'dead', locked_until = NULL, last_error = $2 WHERE id = $1`,
 			n.ID, err.Error())
+		d.activateFallback(ctx, n, log)
+
+	default:
+		delay := Backoff(n.Attempts)
+		metrics.NotificationsSent.WithLabelValues(n.Channel, "retry").Inc()
+		log.Warn("delivery failed, will retry", "retryIn", delay.Round(time.Millisecond), "err", err)
+		d.exec(ctx, `UPDATE notifications SET status = 'retry', locked_until = NULL, last_error = $2,
+			next_attempt_at = now() + $3::interval WHERE id = $1`, n.ID, err.Error(), delay.String())
+		d.maybeFallback(ctx, n, log)
+	}
+}
+
+// maybeFallback activates the parked fallback once the primary has failed a
+// few times or has been undelivered for too long (e.g. channel outage).
+func (d *Dispatcher) maybeFallback(ctx context.Context, n alerting.Notification, log *slog.Logger) {
+	if n.Attempts >= d.FallbackAfter || time.Since(n.CreatedAt) >= d.FallbackDelay {
+		d.activateFallback(ctx, n, log)
+	}
+}
+
+func (d *Dispatcher) activateFallback(ctx context.Context, n alerting.Notification, log *slog.Logger) {
+	tag, err := d.Pool.Exec(ctx, `UPDATE notifications SET status = 'pending', next_attempt_at = now()
+		WHERE fallback_for = $1 AND status = 'standby'`, n.ID)
+	if err != nil {
+		log.Error("activate fallback", "err", err)
 		return
 	}
-	delay := Backoff(n.Attempts)
-	metrics.NotificationsSent.WithLabelValues(n.Channel, "retry").Inc()
-	d.Log.Warn("delivery failed, will retry", "id", n.ID, "channel", n.Channel, "attempt", n.Attempts,
-		"retryIn", delay.Round(time.Millisecond), "err", err)
-	_, _ = d.Pool.Exec(ctx, `
-		UPDATE notifications
-		SET status = 'retry', locked_until = NULL, last_error = $2, next_attempt_at = now() + $3::interval
-		WHERE id = $1`, n.ID, err.Error(), delay.String())
+	if tag.RowsAffected() > 0 {
+		metrics.NotificationsSent.WithLabelValues(n.Channel, "fallback").Inc()
+		log.Warn("primary channel failing, fallback delivery activated")
+		d.exec(ctx, `SELECT pg_notify('kardan_notifications', '')`)
+	}
+}
+
+func (d *Dispatcher) exec(ctx context.Context, sql string, args ...any) {
+	if _, err := d.Pool.Exec(ctx, sql, args...); err != nil {
+		d.Log.Error("update notification", "err", err)
+	}
 }
 
 // Backoff is exponential with full jitter: ~1s, 2s, 4s ... capped at 5 min.

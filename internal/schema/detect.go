@@ -53,6 +53,7 @@ var (
 	settlKey   = regexp.MustCompile(`(?i)(settl.*(dt|date)|value_?date|intrbksttlmdt)`)
 	acctKey    = regexp.MustCompile(`(?i)(account|acct)(no|number|id)?$`)
 	nameKey    = regexp.MustCompile(`(?i)^(nm|name|fullname)$`)
+	partyKey   = regexp.MustCompile(`(?i)^(debtor|creditor|beneficiary|payer|payee|client|customer|ordering_?customer)(_?name)?$`)
 	partyPath  = regexp.MustCompile(`(?i)(dbtr|cdtr|debtor|creditor|client|customer|beneficiary|payer|payee|ultmt)`)
 	contactKey = regexp.MustCompile(`(?i)(email|phone|mobile|msisdn)`)
 )
@@ -109,6 +110,8 @@ func Detect(path string, r gjson.Result) (kind string, sensitive bool) {
 	case acctKey.MatchString(key):
 		return KindAccount, true
 	case nameKey.MatchString(key) && partyPath.MatchString(path):
+		return KindPartyName, true
+	case partyKey.MatchString(key) && r.Type == gjson.String:
 		return KindPartyName, true
 	case contactKey.MatchString(key):
 		return KindContact, true

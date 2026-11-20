@@ -53,6 +53,8 @@ export const statusBadge: Record<string, string> = {
   sending: "bg-sky-50 text-sky-700 ring-sky-600/20 dark:bg-sky-500/10 dark:text-sky-300 dark:ring-sky-400/30",
   retry: "bg-amber-50 text-amber-800 ring-amber-600/20 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-400/30",
   dead: "bg-red-50 text-red-700 ring-red-600/20 dark:bg-red-500/10 dark:text-red-300 dark:ring-red-400/30",
+  standby: "bg-gray-50 text-gray-500 ring-gray-300 dark:bg-gray-800 dark:text-gray-400 dark:ring-gray-700",
+  cancelled: "bg-gray-50 text-gray-400 ring-gray-200 line-through dark:bg-gray-900 dark:text-gray-500 dark:ring-gray-800",
 };
 
 export function Button({

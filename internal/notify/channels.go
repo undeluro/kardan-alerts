@@ -3,7 +3,6 @@ package notify
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net"
 	"strconv"
 	"time"
@@ -61,18 +60,4 @@ func (c *SMTPChannel) Send(ctx context.Context, n alerting.Notification) error {
 		return err
 	}
 	return cl.DialAndSendWithContext(ctx, m)
-}
-
-// LogChannel stands in for SMS and phone until the fake gateway is wired up:
-// it records the delivery in the service log.
-type LogChannel struct {
-	Channel string
-	Log     *slog.Logger
-}
-
-func (c *LogChannel) Name() string { return c.Channel }
-
-func (c *LogChannel) Send(_ context.Context, n alerting.Notification) error {
-	c.Log.Info("simulated delivery", "channel", c.Channel, "to", n.Address, "text", n.BodyText)
-	return nil
 }

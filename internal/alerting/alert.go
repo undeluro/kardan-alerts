@@ -73,10 +73,21 @@ type SchemaNotice struct {
 	Detected []string `json:"detected,omitempty"` // finance kinds found, e.g. isin, iban, amount
 }
 
+// ShortCode is what people type in an SMS reply ("ACK K7Q2"): the last four
+// characters of the alert id.
+func ShortCode(alertID string) string {
+	if len(alertID) <= 4 {
+		return alertID
+	}
+	return alertID[len(alertID)-4:]
+}
+
 // Notification is one outbox row: a message for one person on one channel.
 type Notification struct {
 	ID              string     `json:"id"`
 	AlertID         string     `json:"alertId"`
+	FallbackFor     string     `json:"fallbackFor,omitempty"` // standby fallback for this notification id
+	Reason          string     `json:"reason,omitempty"`      // why this person and channel
 	Recipient       string     `json:"recipient"`
 	Channel         string     `json:"channel"`
 	Address         string     `json:"address"`

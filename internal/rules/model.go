@@ -67,8 +67,11 @@ func normalizeValue(v any) any {
 	return v
 }
 
-// Route sends alerts to a target ("team:<id>" or "user:<id>") on channels
-// (email, sms, phone, ui).
+// Route sends alerts to a target on channels.
+//
+//	to:       team:<id> (every member) | oncall:<id> (who is on call now) | user:<id>
+//	channels: email, sms, phone, ui, or "preferences" to use each recipient's
+//	          own severity/working-hours preferences
 type Route struct {
 	To       string   `yaml:"to" json:"to"`
 	Channels []string `yaml:"channels" json:"channels"`
