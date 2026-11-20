@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, type ClockState, type OnCallNow, type Person, type Preference, type Team } from "../api";
-import { Badge, Button, Card, Notice, PageHeader } from "../ui";
-
-const channelIcon: Record<string, string> = { email: "✉ email", sms: "💬 SMS", phone: "📞 phone", ui: "🖥 UI" };
+import { Badge, Button, Card, ChannelIcon, Notice, PageHeader, channelLabel } from "../ui";
 
 export function TeamsPage({ onClockChange }: { onClockChange: () => void }) {
   const [teams, setTeams] = useState<Team[]>([]);
@@ -156,7 +154,11 @@ function Prefs({ prefs, fallback }: { prefs?: Preference[]; fallback?: string })
           <Badge className="bg-gray-100 text-gray-700 ring-gray-300 dark:bg-gray-800 dark:text-gray-300 dark:ring-gray-700">
             {p.severity ? `${p.severity}+` : "any"}
           </Badge>
-          <span>→ {p.channels.map((c) => channelIcon[c] ?? c).join(", ")}</span>
+          {p.channels.map((channel) => (
+            <span key={channel} className="console-muted inline-flex items-center gap-1">
+              <ChannelIcon channel={channel} size={13} />{channelLabel(channel)}
+            </span>
+          ))}
           {p.between && <span className="text-gray-500">between {p.between}</span>}
           {p.days && <span className="text-gray-500">on {p.days}</span>}
         </li>

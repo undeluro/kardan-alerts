@@ -27,7 +27,7 @@ presentation:
 }
 
 const editorClass =
-  "block w-full resize-y rounded-md border-0 bg-gray-950 p-3 font-mono text-[13px] leading-5 text-gray-100 ring-1 ring-gray-800 focus:ring-2 focus:ring-blue-500";
+  "block w-full resize-y rounded-md border-0 bg-gray-950 p-3 font-mono text-[13px] leading-5 text-gray-100 ring-1 ring-gray-800 focus:ring-2 focus:ring-[var(--console-accent)]";
 
 const exampleEvent = JSON.stringify({
   type: "WORKFLOW_FAILED",

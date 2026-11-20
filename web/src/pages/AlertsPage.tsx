@@ -4,7 +4,7 @@ import { api, type Alert, type Stats, type Team } from "../api";
 import { AlertCard } from "../AlertCard";
 import { AlertDrawer } from "../AlertDrawer";
 import { Link, navigate } from "../router";
-import { Button, Notice, PageHeader, inputClass } from "../ui";
+import { Button, Notice, PageHeader, Select } from "../ui";
 import type { Connection, StatusFilter } from "../useLiveAlerts";
 
 interface Props {
@@ -74,47 +74,49 @@ export function AlertsPage({
   return (
     <>
       <PageHeader title="Alerts" />
-      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4">
-        <Metric icon={Bell} label="Open alerts" value={totals?.openAlerts} />
-        <Metric icon={CheckCircle2} label="Acknowledged" value={totals?.ackedAlerts} />
-        <Metric icon={Activity} label="Matching events · 1h" value={totals?.eventsLastHour} />
-        <Metric icon={Send} label="Pending deliveries" value={totals?.pendingDeliveries}>
+      <div className="grid grid-cols-2 gap-2 lg:grid-cols-4">
+        <Metric icon={Bell} tone="open" label="Open alerts" value={totals?.openAlerts} />
+        <Metric icon={CheckCircle2} tone="acked" label="Acknowledged" value={totals?.ackedAlerts} />
+        <Metric icon={Activity} tone="events" label="Matching events · 1h" value={totals?.eventsLastHour} />
+        <Metric icon={Send} tone="delivery" label="Pending deliveries" value={totals?.pendingDeliveries}>
           {totals && totals.failedDeliveries > 0 && (
             <Link to="/deliveries" className="font-medium text-red-700 hover:underline dark:text-red-300">{totals.failedDeliveries} failed</Link>
           )}
         </Metric>
       </div>
 
-      <section aria-labelledby="alert-queue-title" className="console-panel mt-6">
-        <div className="px-4 pt-4 sm:px-5">
+      <section aria-labelledby="alert-queue-title" className="console-panel mt-3">
+        <div className="px-3 pt-3 sm:px-4">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <h2 id="alert-queue-title" tabIndex={-1} className="text-lg font-semibold tracking-tight">Alert queue</h2>
+            <h2 id="alert-queue-title" tabIndex={-1} className="text-sm font-semibold">Alert queue</h2>
             {!loading && !error && <span className="console-muted text-xs tabular-nums">{filtered.length} of {alerts.length} loaded</span>}
           </div>
-          <div className="mt-3 flex w-fit max-w-full flex-wrap gap-1 rounded-lg bg-[var(--console-canvas)] p-1" role="group" aria-label="Alert status">
-            {statuses.map(([value, label]) => (
-              <button key={label} type="button" aria-pressed={filter === value} onClick={() => setFilter(value)}
-                className="console-muted min-h-8 rounded-md px-2.5 text-sm font-medium hover:text-[var(--console-ink)] aria-pressed:bg-[var(--console-surface)] aria-pressed:text-[var(--console-ink)] aria-pressed:shadow-xs">
-                {label}
-              </button>
-            ))}
-          </div>
-          <div className="my-4 grid grid-cols-2 gap-2 sm:grid-cols-[minmax(10rem,1fr)_minmax(8rem,11rem)_minmax(8rem,10rem)]">
-            <div className="relative col-span-2 sm:col-span-1">
-              <Search className="console-muted pointer-events-none absolute top-1/2 left-3 -translate-y-1/2" size={16} aria-hidden="true" />
-              <input value={query} onChange={(event) => setQuery(event.target.value)} aria-label="Search loaded alerts"
-                type="search" placeholder="Search alerts…" className="h-10 w-full rounded-md border border-[var(--console-line)] pr-10 pl-9 text-sm" />
-              {query && <button type="button" onClick={() => setQuery("")} aria-label="Clear search"
-                className="console-muted absolute inset-y-0 right-0 grid w-10 place-items-center"><X size={16} aria-hidden="true" /></button>}
+          <div className="my-3 grid gap-2 lg:grid-cols-[auto_minmax(0,1fr)] xl:gap-4">
+            <div className="flex flex-wrap gap-1" role="group" aria-label="Alert status">
+              {statuses.map(([value, label]) => (
+                <button key={label} type="button" aria-pressed={filter === value} onClick={() => setFilter(value)}
+                  className="console-toggle">
+                  {label}
+                </button>
+              ))}
             </div>
-            <select aria-label="Team" value={team} onChange={(event) => onTeamChange(event.target.value)} className={`${inputClass} h-10`}>
-              <option value="">All teams</option>
-              {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
-            <select aria-label="Severity" value={severity} onChange={(event) => setSeverity(event.target.value)} className={`${inputClass} h-10`}>
-              <option value="">All severities</option>
-              {[...severityOptions].map((value) => <option key={value} value={value}>{value.charAt(0).toUpperCase() + value.slice(1)}</option>)}
-            </select>
+            <div className="grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-[minmax(6rem,1fr)_minmax(7rem,10rem)_minmax(7rem,10rem)]">
+              <div className="relative col-span-2 sm:col-span-1">
+                <Search className="console-muted pointer-events-none absolute top-1/2 left-3 -translate-y-1/2" size={16} aria-hidden="true" />
+                <input value={query} onChange={(event) => setQuery(event.target.value)} aria-label="Search loaded alerts"
+                  type="search" placeholder="Search alerts…" className="console-control queue-search w-full" />
+                {query && <button type="button" onClick={() => setQuery("")} aria-label="Clear search"
+                  className="console-muted absolute inset-y-0 right-0 grid w-9 place-items-center"><X size={16} aria-hidden="true" /></button>}
+              </div>
+              <Select aria-label="Team" value={team} onChange={(event) => onTeamChange(event.target.value)}>
+                <option value="">All teams</option>
+                {teams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+              </Select>
+              <Select aria-label="Severity" value={severity} onChange={(event) => setSeverity(event.target.value)}>
+                <option value="">All severities</option>
+                {[...severityOptions].map((value) => <option key={value} value={value}>{value.charAt(0).toUpperCase() + value.slice(1)}</option>)}
+              </Select>
+            </div>
           </div>
         </div>
 
@@ -136,7 +138,7 @@ export function AlertsPage({
             <div aria-hidden="true" className="queue-grid queue-table-head hidden border-t border-[var(--console-line)] text-xs font-semibold min-[1120px]:grid">
               <span>Alert</span><span>Severity / status</span><span>Events</span><span>Last seen</span><span />
             </div>
-            <ul className="overflow-hidden rounded-b-xl">
+            <ul className="overflow-hidden rounded-b-md">
               {filtered.map((alert) => <AlertCard key={alert.id} alert={alert} now={now} flash={flash.has(alert.id)} />)}
             </ul>
           </>
@@ -157,17 +159,18 @@ export function AlertsPage({
   );
 }
 
-function Metric({ icon: Icon, label, value, children }: {
+function Metric({ icon: Icon, label, value, tone, children }: {
   icon: typeof Bell;
   label: string;
   value?: number;
+  tone: "open" | "acked" | "events" | "delivery";
   children?: ReactNode;
 }) {
   return (
-    <div className="console-panel min-w-0 px-3 py-2.5 sm:p-4">
-      <div className="console-muted flex items-center gap-2 text-xs font-medium sm:text-sm"><Icon size={16} className="shrink-0 text-[var(--console-accent)]" aria-hidden="true" />{label}</div>
+    <div className={`console-panel metric-panel metric-${tone} min-w-0 px-3 py-2.5`}>
+      <div className="console-muted flex items-center gap-2 text-xs font-medium"><Icon size={14} className="shrink-0" aria-hidden="true" />{label}</div>
       <div className="mt-2 flex flex-wrap items-baseline gap-x-2 gap-y-1 text-xs">
-        <span className="text-2xl font-semibold tracking-tight tabular-nums">{value?.toLocaleString() ?? "—"}</span>
+        <span className="metric-value font-mono text-2xl font-semibold tracking-tight tabular-nums" data-unavailable={value === undefined}>{value?.toLocaleString() ?? "—"}</span>
         {children}
       </div>
     </div>

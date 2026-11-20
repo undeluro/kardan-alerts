@@ -1,4 +1,34 @@
-import type { ReactNode } from "react";
+import { ChevronDown, LockKeyhole, Mail, MessageSquare, Monitor, Phone, Radio } from "lucide-react";
+import type { ComponentPropsWithoutRef, ReactNode } from "react";
+
+const channelIcons = new Map([
+  ["email", Mail], ["sms", MessageSquare], ["phone", Phone], ["ui", Monitor],
+]);
+const channelLabels = new Map([
+  ["email", "Email"], ["sms", "SMS"], ["phone", "Phone"], ["ui", "In-app"],
+]);
+
+export function channelLabel(channel: string) {
+  return channelLabels.get(channel) ?? channel;
+}
+
+export function ChannelIcon({ channel, size = 16, className }: {
+  channel: string;
+  size?: number;
+  className?: string;
+}) {
+  const Icon = channelIcons.get(channel) ?? Radio;
+  return <Icon size={size} className={className} aria-hidden="true" />;
+}
+
+export function Select({ className = "", ...props }: ComponentPropsWithoutRef<"select">) {
+  return (
+    <span className={`console-select ${className}`}>
+      <select {...props} className="console-select-input" />
+      <ChevronDown size={15} className="console-select-chevron" aria-hidden="true" />
+    </span>
+  );
+}
 
 // Full class strings so Tailwind can see them at build time.
 export const tone: Record<string, { stripe: string; badge: string; dot: string }> = {
@@ -38,7 +68,7 @@ export const toneFor = (color: string) => tone[color] ?? tone.gray;
 
 export function Badge({ className = "", children }: { className?: string; children: ReactNode }) {
   return (
-    <span className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${className}`}>
+    <span className={`inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-xs font-medium ring-1 ring-inset ${className}`}>
       {children}
     </span>
   );
@@ -72,8 +102,8 @@ export function Button({
 }) {
   const styles =
     variant === "primary"
-      ? "bg-blue-700 text-white hover:bg-blue-800 dark:bg-blue-400 dark:text-gray-950 dark:hover:bg-blue-300"
-      : "bg-white text-gray-900 ring-1 ring-inset ring-gray-300 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-100 dark:ring-gray-600 dark:hover:bg-gray-700";
+      ? "console-button-primary"
+      : "console-button-secondary";
   return (
     <button
       type="button"
@@ -82,7 +112,7 @@ export function Button({
         e.stopPropagation();
         onClick();
       }}
-      className={`inline-flex min-h-9 items-center justify-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium shadow-xs transition disabled:cursor-not-allowed disabled:opacity-50 ${styles}`}
+      className={`inline-flex min-h-8 items-center justify-center gap-2 rounded-sm px-3 py-1.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${styles}`}
     >
       {children}
     </button>
@@ -121,7 +151,7 @@ const financeTone: Record<string, string> = {
 export function FinanceChip({ kind, sensitive }: { kind: string; sensitive?: boolean }) {
   return (
     <Badge className={financeTone[kind] ?? "bg-sky-50 text-sky-700 ring-sky-600/20 dark:bg-sky-500/10 dark:text-sky-300 dark:ring-sky-400/30"}>
-      {sensitive && <span title="Sensitive: masked on SMS and email">🔒</span>}
+      {sensitive && <span role="img" aria-label="Sensitive field" title="Sensitive: masked on SMS and email"><LockKeyhole size={12} aria-hidden="true" /></span>}
       {kind}
     </Badge>
   );
@@ -129,10 +159,10 @@ export function FinanceChip({ kind, sensitive }: { kind: string; sensitive?: boo
 
 export function PageHeader({ title, subtitle, actions }: { title: string; subtitle?: ReactNode; actions?: ReactNode }) {
   return (
-    <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
+    <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
       <div>
-        <h1 className="text-3xl font-semibold tracking-tight text-gray-950 dark:text-gray-50">{title}</h1>
-        {subtitle && <p className="mt-1 max-w-3xl text-sm text-gray-500 dark:text-gray-400">{subtitle}</p>}
+        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+        {subtitle && <p className="mt-1 max-w-3xl text-sm console-muted">{subtitle}</p>}
       </div>
       {actions && <div className="flex gap-2">{actions}</div>}
     </div>
@@ -140,7 +170,7 @@ export function PageHeader({ title, subtitle, actions }: { title: string; subtit
 }
 
 export function Card({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <div className={`rounded-lg bg-white ring-1 ring-gray-200 dark:bg-gray-900 dark:ring-gray-800 ${className}`}>{children}</div>;
+  return <div className={`console-panel ${className}`}>{children}</div>;
 }
 
 export function Notice({ tone: t = "info", children }: { tone?: "info" | "warn" | "error"; children: ReactNode }) {
@@ -153,4 +183,4 @@ export function Notice({ tone: t = "info", children }: { tone?: "info" | "warn" 
 }
 
 export const inputClass =
-  "w-full rounded-md border-0 bg-white px-2.5 py-1.5 text-sm text-gray-900 ring-1 ring-gray-300 ring-inset placeholder:text-gray-400 focus:ring-2 focus:ring-blue-600 dark:bg-gray-950 dark:text-gray-100 dark:ring-gray-700";
+  "console-control w-full";

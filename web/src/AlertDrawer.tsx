@@ -1,8 +1,8 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { Code2, LockKeyhole, Mail, MessageSquare, Phone, X } from "lucide-react";
+import { Code2, LockKeyhole, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { api, type Alert, type Notification } from "./api";
-import { Badge, Button, Notice, alertStatusLabel, statusBadge, timeAgo, toneFor } from "./ui";
+import { Badge, Button, ChannelIcon, Notice, alertStatusLabel, channelLabel, statusBadge, timeAgo, toneFor } from "./ui";
 
 interface Props {
   id: string;
@@ -12,7 +12,6 @@ interface Props {
   onAction: (alert: Alert, action: "ack" | "resolve") => Promise<Alert>;
 }
 
-const channelIcons = { email: Mail, sms: MessageSquare, phone: Phone };
 const deliveryLabels: Record<Notification["status"], string> = {
   pending: "Pending", sending: "Sending", sent: "Sent", retry: "Retrying",
   dead: "Failed", standby: "Fallback on standby", cancelled: "Cancelled",
@@ -82,7 +81,7 @@ export function AlertDrawer({ id, live, now, onClose, onAction }: Props) {
   return (
     <Dialog.Root open onOpenChange={(open) => { if (!open) onClose(); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-40 bg-[#091526]/55" />
+        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/60" />
         <Dialog.Content
           className="fixed inset-y-0 right-0 z-50 flex w-full max-w-xl flex-col overflow-hidden border-l border-[var(--console-line)] bg-[var(--console-surface)] text-[var(--console-ink)] shadow-2xl"
           onCloseAutoFocus={(event) => {
@@ -169,14 +168,13 @@ export function AlertDrawer({ id, live, now, onClose, onAction }: Props) {
 }
 
 function Delivery({ notification: n }: { notification: Notification }) {
-  const Icon = channelIcons[n.channel as keyof typeof channelIcons] ?? Mail;
   return (
     <li className={`flex flex-wrap items-start justify-between gap-2 py-2.5 text-sm ${n.fallbackFor ? "pl-4" : ""}`}>
       <div className="min-w-0 flex-1">
         <div className="flex items-start gap-2 break-words">
-          <Icon size={16} className="console-muted mt-0.5 shrink-0" aria-hidden="true" />
+          <ChannelIcon channel={n.channel} className="console-muted mt-0.5 shrink-0" />
           <div className="min-w-0">
-            <span className="font-medium capitalize">{n.channel === "sms" ? "SMS" : n.channel}</span> · {n.recipient}
+            <span className="font-medium capitalize">{channelLabel(n.channel)}</span> · {n.recipient}
             {n.address && <div className="console-muted break-all text-xs">{n.address}</div>}
           </div>
         </div>

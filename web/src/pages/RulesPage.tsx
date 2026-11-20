@@ -1,10 +1,8 @@
 import { useEffect, useState } from "react";
 import { api, type RuleView } from "../api";
 import { Link } from "../router";
-import { Badge, Button, Card, Notice, PageHeader, toneFor } from "../ui";
+import { Badge, Button, Card, ChannelIcon, Notice, PageHeader, channelLabel, inputClass, toneFor } from "../ui";
 import { navigate } from "../router";
-
-const channelIcon: Record<string, string> = { email: "✉", sms: "💬", phone: "📞", ui: "🖥" };
 
 export function RulesPage() {
   const [rules, setRules] = useState<RuleView[] | null>(null);
@@ -57,7 +55,8 @@ export function RulesPage() {
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         placeholder="Filter by name, team or field…"
-        className="mb-3 w-full max-w-sm rounded-md border-0 bg-white px-3 py-1.5 text-sm ring-1 ring-gray-300 ring-inset dark:bg-gray-900 dark:ring-gray-700"
+        aria-label="Filter rules"
+        className={`${inputClass} mb-3 max-w-sm`}
       />
       <Card className="divide-y divide-gray-100 dark:divide-gray-800">
         {rules === null && <div className="p-4 text-sm text-gray-500">Loading…</div>}
@@ -85,8 +84,13 @@ export function RulesPage() {
               </div>
               <div className="shrink-0 text-right text-sm">
                 <div className="text-gray-700 dark:text-gray-300">{r.team}</div>
-                <div className="mt-0.5 text-gray-500" title={channels.join(", ")}>
-                  {channels.map((c) => channelIcon[c] ?? c).join(" ")}
+                <div className="console-muted mt-1 flex flex-wrap justify-end gap-2">
+                  {channels.map((channel) => (
+                    <span key={channel} title={channelLabel(channel)}>
+                      <ChannelIcon channel={channel} size={14} />
+                      <span className="sr-only">{channelLabel(channel)}</span>
+                    </span>
+                  ))}
                 </div>
               </div>
             </Link>

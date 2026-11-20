@@ -1,4 +1,4 @@
-import { BellRing, Cable, Clock3, Database, Radio, Send, SlidersHorizontal, Users, UserRound } from "lucide-react";
+import { ArrowRight, BellRing, Cable, Clock3, Compass, Database, Moon, Radio, Send, SlidersHorizontal, Sun, Users, UserRound } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { api, type ClockState, type SchemaNotice, type Team } from "./api";
 import { AlertsPage } from "./pages/AlertsPage";
@@ -43,6 +43,7 @@ export default function App() {
   const { path } = useLocation();
   const [team, setTeam] = useState(() => store.get("kardan.team", ""));
   const [filter, setFilter] = useState<StatusFilter>("active");
+  const [theme, setTheme] = useState(() => store.get("kardan.theme", "dark") === "light" ? "light" : "dark");
   const [actor, setActor] = useState(() => store.get("kardan.actor", ""));
   const [teams, setTeams] = useState<Team[]>([]);
   const [now, setNow] = useState(Date.now());
@@ -78,6 +79,10 @@ export default function App() {
   useEffect(() => store.set("kardan.team", team), [team]);
   useEffect(() => store.set("kardan.actor", actor), [actor]);
   useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    store.set("kardan.theme", theme);
+  }, [theme]);
+  useEffect(() => {
     const t = window.setInterval(() => setNow(Date.now()), 10_000);
     return () => window.clearInterval(t);
   }, []);
@@ -98,7 +103,7 @@ export default function App() {
   else if (path !== "/" && !alertId)
     page = (
       <div className="py-16 text-center">
-        <div className="text-4xl">🧭</div>
+        <Compass size={28} aria-hidden="true" className="console-muted mx-auto" />
         <h1 className="mt-2 text-lg font-semibold">Page not found</h1>
         <p className="mt-1 text-sm text-gray-500">
           Nothing lives at <code className="font-mono">{path}</code>.{" "}
@@ -130,8 +135,6 @@ export default function App() {
       />
     );
 
-  const current = NAV.find((item) => item.match(path));
-
   return (
     <div className="console-layout">
       <a className="skip-link" href="#main-content">Skip to content</a>
@@ -153,7 +156,6 @@ export default function App() {
       <div className="console-workspace">
         <header className="console-topbar">
           <div className="flex min-w-0 flex-wrap items-center gap-3">
-            <span className="font-medium">{current?.label ?? "Workspace"}</span>
             <LiveIndicator connection={connection} />
             {clock && clock.offsetMinutes !== 0 && (
               <Link to="/teams" className="inline-flex items-center gap-1 rounded-md bg-amber-100 px-2 py-1 text-xs font-medium text-amber-900 dark:bg-amber-500/20 dark:text-amber-200">
@@ -162,16 +164,24 @@ export default function App() {
               </Link>
             )}
           </div>
-          <label className="console-actor">
-            <UserRound size={15} aria-hidden="true" />
-            <span className="hidden sm:inline">Acting as</span>
-            <input
-              aria-label="Acting as"
-              value={actor}
-              onChange={(e) => setActor(e.target.value)}
-              placeholder="Your name"
-            />
-          </label>
+          <div className="flex items-center gap-2">
+            <label className="console-actor">
+              <UserRound size={15} aria-hidden="true" />
+              <span className="hidden sm:inline">Acting as</span>
+              <input
+                aria-label="Acting as"
+                value={actor}
+                onChange={(e) => setActor(e.target.value)}
+                placeholder="Your name"
+              />
+            </label>
+            <button type="button" className="console-theme"
+              aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+              title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
+              {theme === "dark" ? <Sun size={15} aria-hidden="true" /> : <Moon size={15} aria-hidden="true" />}
+            </button>
+          </div>
         </header>
         <main id="main-content" tabIndex={-1} className="console-main">{page}</main>
       </div>
@@ -198,7 +208,7 @@ export default function App() {
                 ))}
               </div>
             )}
-            <div className="mt-1.5 text-xs text-gray-500">Click to review fields and create a rule →</div>
+            <div className="console-muted mt-1.5 flex items-center gap-1 text-xs">Review schema <ArrowRight size={13} aria-hidden="true" /></div>
           </button>
         ))}
         {toast && <div role="status" className="rounded-md bg-gray-900 px-4 py-2 text-sm text-white shadow-lg">{toast}</div>}
@@ -215,8 +225,8 @@ function LiveIndicator({ connection }: { connection: Connection }) {
   } as const;
   const [dot, label] = map[connection];
   return (
-    <span className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400" aria-live="polite">
-      <span className={`h-2 w-2 rounded-full ${dot}`} />
+    <span className="console-live flex items-center gap-1.5 text-xs font-medium" aria-live="polite">
+      <span aria-hidden="true" className={`size-1.5 rounded-full ${dot}`} />
       {label}
     </span>
   );
