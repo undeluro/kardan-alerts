@@ -4,12 +4,10 @@
 prefer, without flooding them, for trading, settlement and payments operations. It accepts events of *any* shape
 from any source, and teams decide what reaches them with rules they edit as data, not code.
 
-> Hackathon 2026 — *Flexible Alerting & Notification Service*. Status: **Milestones 1–7 done** (end-to-end
-> slice; Kafka, log-file, FIX and ISO 20022 sources; schema registry with finance field detection; live rule
-> editing; reliable delivery with on-call, preferences, masking, circuit breakers and fallbacks; money-at-risk
-> ranking, incident correlation, grouping windows, throttling and auto-resolve; window totals, missing-event
-> detection, market calendars, cut-off countdowns and escalation ladders; runbooks in any shape with actions,
-> four-eyes approvals and a tamper-evident audit trail). See [Roadmap](#roadmap) for what is next.
+> Hackathon 2026 — *Flexible Alerting & Notification Service*. Status: **all 11 milestones done**. Start with the
+> [five-minute demo](#five-minute-demo), the [measured performance](loadtest/results.md), the
+> [architecture](docs/architecture.md), [what is mocked](docs/mocked.md) and the
+> [AI usage, security and privacy statement](docs/ai-usage.md).
 
 ## Quick start
 
@@ -19,6 +17,26 @@ Requirements: Docker with Compose v2. Nothing else.
 docker compose up --build          # first build takes ~2 minutes
 ./samples/send.sh                  # Windows: .\samples\send.ps1
 ```
+
+Optional: `ANTHROPIC_API_KEY=... docker compose up --build` turns on Claude assistance for teams that opt in
+(see [AI usage](docs/ai-usage.md)); everything works without it.
+
+### Five-minute demo
+
+```sh
+./samples/rates-desk-day.sh        # "a day on the rates desk", one step per Enter
+```
+
+Market open, a counterparty outage that becomes one incident with dollars at risk and a cut-off countdown, a
+runbook that runs itself and stops for four-eyes approval by SMS, recovery, the audit chain, Kardan proposing a
+rule change from how the day went, and finally a schema nobody has seen onboarded in two minutes. The talk track
+is in [docs/demo-script.md](docs/demo-script.md).
+
+### Onboard a team in two minutes
+
+Teams → **Onboard a team**: name the team, pick or add people, paste one event in any format (JSON, ISO 20022
+XML, FIX, a log line), click the fields that matter, choose who gets it and how, review (the rule is tested on
+the sample and backtested on the last 24 hours of real traffic), create, and send the sample as a live event.
 
 `send` pushes samples through every source type: HTTP webhooks (Alertmanager JSON, ISO 20022 XML), Kafka topics
 and tailed log files (regex-parsed pricing logs, a FIX engine log). Then play the scenarios:
@@ -61,9 +79,23 @@ curl -X POST localhost:8091/api/state -d '{"counterpartyHealthy":false}'  # or t
 | What actions call        | http://localhost:8091 (mock operations: workflow engine, payments hub, trading controls…) |
 | Deliveries, on-call      | http://localhost:8080/deliveries · /teams                     |
 | Markets and cut-offs     | http://localhost:8080/markets                                 |
-| Prometheus metrics       | http://localhost:8080/metrics                                 |
+| Proposals, onboarding    | http://localhost:8080/proposals · /onboarding                 |
+| Metrics and dashboards   | http://localhost:9090 (Prometheus) · http://localhost:3000 (Grafana, "Kardan overview") |
 
 Scale the workers horizontally: `docker compose up -d --scale worker=3`.
+
+### Load tests
+
+```sh
+make load         # 500 events/s for 30 s, every event a new alert and SMS; prints throughput, p50/p99, losses
+make load-storm   # market open: 100 -> 1000 -> 100 events/s
+make load-series  # the series behind loadtest/results.md
+make k6           # k6 view of the HTTP ingest edge
+```
+
+`cmd/loadgen` creates its own fixtures through the API, measures end-to-end latency at the SMS gateway (event
+accepted by Kardan -> provider accepted the SMS), cross-checks against the server-side Prometheus histogram, and
+fails if a single notification is missing. Results: [loadtest/results.md](loadtest/results.md).
 
 ## What works today
 
@@ -210,7 +242,25 @@ Scale the workers horizontally: `docker compose up -d --scale worker=3`.
 - **Live UI.** A server-sent-events feed per team (push, no refresh), ack/resolve, and a detail drawer with each
   delivery's channel, recipient, reason, fallbacks and the raw payload. The Deliveries page shows channel health
   and breaker state, the Teams page shows on-call now. In demo mode a shared business clock lets you jump to
-  21:00 or next week to show schedules. Dark mode follows the OS.
+  21:00 or next week to show schedules. Dark by default, with a light theme one click away.
+- **Rule builder and backtests.** A visual AND/OR/NOT builder and the YAML stay in sync (comments kept). Every
+  draft is tested on a sample event and **backtested on the last 1–24 hours of recorded events** (replayed from
+  the durable log, nothing stored or sent): events matched, alerts it would open, threshold crossings for window
+  rules, and a timeline.
+- **People, teams and preferences in the UI.** An ordered preferences matrix (severity × channel, working hours,
+  days) with a live "who gets what right now" preview, on-call rotations, and an onboarding wizard. UI edits are
+  stored over `teams.yaml`, validated before saving, labelled, and revertible.
+- **Incident view.** Money at risk, nearest cut-off, teams and every alert of a correlated incident.
+- <a id="proposals-and-fatigue-analysis"></a>**Proposals and fatigue analysis.** Anyone can propose a change to
+  a rule or runbook from an alert or the editor; a different, named person reviews the diff and applies it.
+  Kardan proposes changes itself from how alerts were handled: rules whose alerts clear on their own, that people
+  close within minutes while being paged, or that nobody acknowledges.
+- **Optional Claude assistance.** Draft a rule from a sentence; structure a pasted runbook into steps with
+  catalogue actions and approvals. Opt-in per team, only text and field names leave the service, output is
+  schema-constrained and validated, risky actions always need approval, and built-in readers answer when Claude is
+  off. Details: [docs/ai-usage.md](docs/ai-usage.md).
+- **Measured.** Prometheus and a Grafana dashboard in the stack, a load generator that checks for lost
+  notifications, and published numbers for one and three workers: [loadtest/results.md](loadtest/results.md).
 - **Horizontal scaling by role.** One binary, `ROLES=api,ingest,processor,dispatcher` in any mix. The workers are
   stateless; state lives in Postgres (alerts, outbox), Redis (live fan-out) and Redpanda (durable event log).
 
@@ -366,7 +416,15 @@ A new kind of action is an entry in `config/actions.yaml`:
 | GET | `/api/audit?prefix=&subject=` · `/api/audit/verify` | audit trail · chain verification |
 | GET | `/api/alerts/{id}/timeline` · `/report` | who did what · Markdown incident report |
 | POST | `/inbound/sms` · `/inbound/call` | provider webhooks for replies (ACK, RESOLVE, APPROVE, REJECT) and keypad presses (token required) |
-| GET | `/api/teams` · `/api/stats` · `/api/info` | directory, counters, facets, operators, config errors |
+| GET | `/api/teams` · `/api/stats` · `/api/info` | directory (with origin of each entry), counters, facets, operators, config errors |
+| PUT · DELETE | `/api/teams/{id}` · `/api/people/{id}` | save a team or person over `teams.yaml` (`If-Match: <version>`) / revert to the file |
+| POST | `/api/rules/backtest` | replay recent events through a draft: `{ruleYaml, hours}` |
+| POST | `/api/events/inspect` | parse an event, list fields with finance detection and facets (nothing stored) |
+| GET | `/api/ai/status` | whether Claude is configured and which teams opted in |
+| POST | `/api/ai/rule-draft` · `/api/ai/runbook` | rule draft from `{sentence, team}` · steps from `{text, team}` |
+| GET · POST | `/api/proposals` · `/api/proposals/{id}` | review queue / propose `{kind, target, title, rationale, body}` |
+| POST | `/api/proposals/{id}/accept` · `/reject` | decide (a named person other than the proposer); accepting applies the change |
+| POST | `/api/proposals/analyze` | fatigue analysis over `{days}`: files suggestions for noisy rules |
 
 ## Development
 
@@ -380,6 +438,8 @@ go test ./...                                          # unit tests
 Configuration is through environment variables with working defaults; see `internal/platform/config/config.go`.
 
 ## What is mocked
+
+Summary below; the full list with what it takes to make each part real is in [docs/mocked.md](docs/mocked.md).
 
 | Real system | Here |
 |---|---|
@@ -402,7 +462,11 @@ Configuration is through environment variables with working defaults; see `inter
 6. ~~`aggregate` and `absence` rules, market calendars, cut-off countdowns and escalation ladders~~ ✔
 7. ~~Runbooks (YAML / Markdown / checklist / link / free text) with actions, four-eyes approvals and a hash-chained
    audit trail~~ ✔
-8. Rule builder with dry-run on recent events, onboarding wizard
-9. AI-assisted runbook structuring and rule drafting (opt-in)
-10. Load tests (p50/p99 measured, 1 vs 3 replicas)
-11. Docs, demo script, video
+8. ~~Rule builder with backtests on recorded events, editable preferences, incident view, onboarding wizard~~ ✔
+9. ~~Claude-assisted rule drafting and runbook structuring (opt-in), proposal queue, fatigue suggestions~~ ✔
+10. ~~Prometheus/Grafana, load generator, market-open storm, 1 vs 3 workers ([results](loadtest/results.md))~~ ✔
+11. ~~Docs ([architecture](docs/architecture.md), [mocked](docs/mocked.md), [AI usage](docs/ai-usage.md)), demo
+    script and video talk track~~ ✔
+
+Next, beyond the hackathon scope: regulatory incident clocks (DORA-style report deadlines with pre-filled drafts),
+impact tolerances for important business services, and SSO-backed identity.

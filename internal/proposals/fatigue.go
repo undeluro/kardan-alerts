@@ -34,7 +34,10 @@ func Analyze(ctx context.Context, pool *pgxpool.Pool, days int) ([]RuleStats, er
 	rows, err := pool.Query(ctx, `
 		SELECT a.rule_id,
 		       count(*),
+		       -- Cleared by itself: a recovery event or silence, not a runbook fixing it
+		       -- (automation working) and not a digest window ending (by design).
 		       count(*) FILTER (WHERE a.status = 'resolved' AND a.acked_at IS NULL AND a.resolved_by LIKE 'auto:%'
+		                          AND a.resolved_by NOT LIKE 'auto: runbook%' AND a.resolved_by NOT LIKE 'auto: window%'
 		                          AND a.resolved_at - a.created_at < interval '10 minutes'),
 		       count(*) FILTER (WHERE a.status = 'resolved' AND a.resolved_by NOT LIKE 'auto:%'
 		                          AND a.resolved_at - a.created_at < interval '5 minutes'),
