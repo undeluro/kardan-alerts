@@ -55,7 +55,10 @@ type Config struct {
 	Fallbacks map[string]string
 
 	// DemoMode enables the shared business clock offset (time travel for demos).
-	DemoMode bool
+	DemoMode       bool
+	DemoSSO        bool
+	DemoSamToken   string
+	DemoMariaToken string
 
 	// ApprovalSecret signs one-click approval links in emails. Every replica
 	// needs the same value.
@@ -105,11 +108,17 @@ func Load() (Config, error) {
 		GatewayToken:     env("GATEWAY_TOKEN", ""),
 		Fallbacks:        parsePairs(env("FALLBACKS", "phone:sms,sms:email")),
 		DemoMode:         env("DEMO_MODE", "false") == "true",
+		DemoSSO:          env("DEMO_SSO", "false") == "true",
+		DemoSamToken:     env("DEMO_SSO_SAM_TOKEN", ""),
+		DemoMariaToken:   env("DEMO_SSO_MARIA_TOKEN", ""),
 		ApprovalSecret:   env("APPROVAL_SECRET", "dev-approval-secret-change-me"),
 		ConfigDir:        env("CONFIG_DIR", "./config"),
 		DedupWindow:      envDuration("DEDUP_WINDOW", 5*time.Minute),
 		DispatchWorkers:  envInt("DISPATCH_WORKERS", 16),
 		MaxAttempts:      envInt("MAX_ATTEMPTS", 8),
+	}
+	if c.DemoSSO && (!c.DemoMode || c.DemoSamToken == "" || c.DemoMariaToken == "" || c.DemoSamToken == c.DemoMariaToken) {
+		return Config{}, fmt.Errorf("DEMO_SSO requires DEMO_MODE and different nonempty account tokens")
 	}
 	return c, nil
 }

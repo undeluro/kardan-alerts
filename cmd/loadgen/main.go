@@ -40,6 +40,7 @@ import (
 
 type config struct {
 	api, gateway, prom string
+	apiToken           string
 	transport          string
 	kafka, topic       string
 	scenario           string
@@ -69,6 +70,8 @@ func main() {
 	flag.StringVar(&c.label, "label", "", "label for this run in the report (e.g. \"3 workers\")")
 	flag.StringVar(&c.out, "out", "", "append the JSON result to this file")
 	flag.Parse()
+	c.api = strings.TrimRight(c.api, "/")
+	c.apiToken = env("DEMO_SSO_MARIA_TOKEN", "kardan-demo-maria")
 	if err := run(c); err != nil {
 		fmt.Fprintln(os.Stderr, "loadgen:", err)
 		os.Exit(1)
@@ -112,7 +115,7 @@ autoResolve:
   after: 2m
 `
 
-func call(method, u string, body any, out any) error {
+func (c config) call(method, u string, body any, out any) error {
 	var r io.Reader
 	if s, ok := body.(string); ok {
 		r = strings.NewReader(s)
@@ -120,8 +123,14 @@ func call(method, u string, body any, out any) error {
 		b, _ := json.Marshal(body)
 		r = bytes.NewReader(b)
 	}
-	req, _ := http.NewRequest(method, u, r)
+	req, err := http.NewRequest(method, u, r)
+	if err != nil {
+		return err
+	}
 	req.Header.Set("X-User", "loadgen")
+	if strings.HasPrefix(u, c.api+"/api/") && c.apiToken != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiToken)
+	}
 	if _, ok := body.(string); ok {
 		req.Header.Set("Content-Type", "application/yaml")
 	} else {
@@ -143,14 +152,14 @@ func call(method, u string, body any, out any) error {
 }
 
 func setup(c config, run string) error {
-	if err := call("PUT", c.api+"/api/people/"+personID, map[string]any{"name": "Load test bot", "phone": phone, "timezone": "UTC"}, nil); err != nil {
+	if err := c.call("PUT", c.api+"/api/people/"+personID, map[string]any{"name": "Load test bot", "phone": phone, "timezone": "UTC"}, nil); err != nil {
 		return err
 	}
-	if err := call("PUT", c.api+"/api/teams/"+teamID, map[string]any{"name": "Load test (synthetic)", "members": []string{personID}}, nil); err != nil {
+	if err := c.call("PUT", c.api+"/api/teams/"+teamID, map[string]any{"name": "Load test (synthetic)", "members": []string{personID}}, nil); err != nil {
 		return err
 	}
-	_ = call("DELETE", c.api+"/api/rules/"+ruleID, nil, nil)
-	if err := call("POST", c.api+"/api/rules", fmt.Sprintf(ruleYAML, run), nil); err != nil {
+	_ = c.call("DELETE", c.api+"/api/rules/"+ruleID, nil, nil)
+	if err := c.call("POST", c.api+"/api/rules", fmt.Sprintf(ruleYAML, run), nil); err != nil {
 		return err
 	}
 	time.Sleep(2 * time.Second) // rules reach every replica over Redis; the version check is the safety net
@@ -162,20 +171,20 @@ func setup(c config, run string) error {
 func teardown(c config, run string) {
 	fmt.Println("  cleaning up: resolving this run's alerts (their all-clear SMS go out now, not during the next run)")
 	quick := strings.Replace(fmt.Sprintf(ruleYAML, run), "after: 2m", "after: 1s", 1)
-	if err := call("PUT", c.api+"/api/rules/"+ruleID, quick, nil); err == nil {
+	if err := c.call("PUT", c.api+"/api/rules/"+ruleID, quick, nil); err == nil {
 		deadline := time.Now().Add(10 * time.Minute)
 		for time.Now().Before(deadline) {
 			var open []json.RawMessage
-			if call("GET", c.api+"/api/alerts?team="+teamID+"&status=active&limit=1", nil, &open) == nil && len(open) == 0 {
+			if c.call("GET", c.api+"/api/alerts?team="+teamID+"&status=active&limit=1", nil, &open) == nil && len(open) == 0 {
 				break
 			}
 			time.Sleep(time.Second)
 		}
 		_ = waitQuiet(c)
 	}
-	_ = call("DELETE", c.api+"/api/rules/"+ruleID, nil, nil)
-	_ = call("DELETE", c.api+"/api/teams/"+teamID, nil, nil)
-	_ = call("DELETE", c.api+"/api/people/"+personID, nil, nil)
+	_ = c.call("DELETE", c.api+"/api/rules/"+ruleID, nil, nil)
+	_ = c.call("DELETE", c.api+"/api/teams/"+teamID, nil, nil)
+	_ = c.call("DELETE", c.api+"/api/people/"+personID, nil, nil)
 }
 
 // ---- sending ----------------------------------------------------------------------
@@ -307,7 +316,7 @@ func run(c config) error {
 	if err := warmUp(c, s, runID); err != nil {
 		return err
 	}
-	if err := call("POST", c.gateway+"/api/stats/reset", nil, nil); err != nil {
+	if err := c.call("POST", c.gateway+"/api/stats/reset", nil, nil); err != nil {
 		return fmt.Errorf("reset gateway stats: %w", err)
 	}
 
@@ -395,7 +404,7 @@ func run(c config) error {
 	var last struct{ Received int64 }
 	lastChange, lastCount := time.Now(), int64(-1)
 	for time.Now().Before(deadline) {
-		if err := call("GET", c.gateway+"/api/stats?kind=sms&purpose=alert&phone="+url.QueryEscape(phone), nil, &last); err == nil {
+		if err := c.call("GET", c.gateway+"/api/stats?kind=sms&purpose=alert&phone="+url.QueryEscape(phone), nil, &last); err == nil {
 			if last.Received != lastCount {
 				lastCount, lastChange = last.Received, time.Now()
 			}
@@ -415,7 +424,7 @@ func run(c config) error {
 			Samples                    int
 		}
 		q := url.Values{"from": {p.Start.UTC().Format(time.RFC3339Nano)}, "to": {p.End.UTC().Format(time.RFC3339Nano)}, "phone": {phone}, "kind": {"sms"}, "purpose": {"alert"}}
-		_ = call("GET", c.gateway+"/api/stats?"+q.Encode(), nil, &st)
+		_ = c.call("GET", c.gateway+"/api/stats?"+q.Encode(), nil, &st)
 		res.E2E = append(res.E2E, phaseResult{Phase: p.Name, Rate: p.Rate, pct: pct{P50: st.P50Ms, P95: st.P95Ms, P99: st.P99Ms, Max: st.MaxMs, N: st.Samples}})
 	}
 	time.Sleep(11 * time.Second) // two scrape intervals, so the slowest (latest) observations are in
@@ -447,7 +456,7 @@ func waitQuiet(c config) error {
 	still := time.Now()
 	for time.Now().Before(deadline) {
 		var st struct{ Received int64 }
-		if err := call("GET", c.gateway+"/api/stats", nil, &st); err != nil {
+		if err := c.call("GET", c.gateway+"/api/stats", nil, &st); err != nil {
 			return fmt.Errorf("gateway: %w", err)
 		}
 		if st.Received != last {
@@ -462,7 +471,7 @@ func waitQuiet(c config) error {
 
 func warmUp(c config, s sender, runID string) error {
 	const n = warmUpEvents
-	if err := call("POST", c.gateway+"/api/stats/reset", nil, nil); err != nil {
+	if err := c.call("POST", c.gateway+"/api/stats/reset", nil, nil); err != nil {
 		return fmt.Errorf("reset gateway stats: %w", err)
 	}
 	for i := 0; i < n; i += 10 {
@@ -480,7 +489,7 @@ func warmUp(c config, s sender, runID string) error {
 	deadline := time.Now().Add(60 * time.Second)
 	for time.Now().Before(deadline) {
 		var st struct{ Received int64 }
-		if call("GET", c.gateway+"/api/stats?kind=sms&purpose=alert&phone="+url.QueryEscape(phone), nil, &st) == nil && st.Received >= n {
+		if c.call("GET", c.gateway+"/api/stats?kind=sms&purpose=alert&phone="+url.QueryEscape(phone), nil, &st) == nil && st.Received >= n {
 			fmt.Println("  warm-up delivered")
 			return nil
 		}
@@ -531,7 +540,7 @@ func promQuery(c config, q string) (float64, error) {
 			} `json:"result"`
 		} `json:"data"`
 	}
-	if err := call("GET", c.prom+"/api/v1/query?query="+url.QueryEscape(q), nil, &out); err != nil {
+	if err := c.call("GET", c.prom+"/api/v1/query?query="+url.QueryEscape(q), nil, &out); err != nil {
 		return math.NaN(), err
 	}
 	if len(out.Data.Result) == 0 {

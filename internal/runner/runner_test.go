@@ -49,6 +49,11 @@ func TestFourEyes(t *testing.T) {
 	if p, err := CheckApprover(dir, run, "settlements", "Maria Rossi"); err != nil || p.ID != "maria" {
 		t.Errorf("second person: %v", err)
 	}
+	renamed := &alerting.Run{RequestedBy: "An older display name", RequestedByID: "sam", Risk: "medium"}
+	if _, err := CheckApprover(dir, renamed, "settlements", "sam"); !errors.Is(err, ErrSelfApproval) {
+		t.Fatalf("stable identity must prevent self-approval after a name change: %v", err)
+	}
+
 	high := &alerting.Run{RequestedBy: "kardan", Risk: "high"}
 	if _, err := CheckApprover(dir, high, "payments", "maria"); !errors.Is(err, ErrNotEntitled) {
 		t.Errorf("high risk needs the alert's team: %v", err)

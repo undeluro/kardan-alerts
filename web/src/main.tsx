@@ -1,6 +1,7 @@
 import { lazy, StrictMode, Suspense } from "react";
 import { createRoot } from "react-dom/client";
 import "./index.css";
+import { ConsoleSession } from "./ConsoleSession";
 import { useLocation } from "./router";
 
 const Console = lazy(() => import("./App"));
@@ -10,7 +11,7 @@ function Root() {
   const { path } = useLocation();
   return (
     <Suspense fallback={null}>
-      {path === "/landing" || path === "/landing/" ? <Landing /> : <Console />}
+      {path === "/landing" || path === "/landing/" ? <Landing /> : <ConsoleSession><Console /></ConsoleSession>}
     </Suspense>
   );
 }

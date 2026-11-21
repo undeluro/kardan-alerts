@@ -11,6 +11,7 @@
 set -eu
 URL="${KARDAN_URL:-http://localhost:8080}"
 OPS="${MOCKOPS_URL:-http://localhost:8091}"
+API_TOKEN="${DEMO_SSO_MARIA_TOKEN:-kardan-demo-maria}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 bold() { printf '\n\033[1m%s\033[0m\n' "$*"; }
@@ -25,7 +26,7 @@ post() { curl -sS -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: appli
 curl -fsS "$URL/healthz" >/dev/null || { echo "Kardan is not running at $URL (docker compose up --build)"; exit 1; }
 
 step "07:55  Before the open" \
-  "Everything is healthy. Set 'Acting as' in the top bar to a name, e.g. Priya." \
+  "Everything is healthy. Sign in to Kardan as Sam Okafor using the demo token." \
   "The counterparty service is up and settlement retries work."
 post -d '{"counterpartyHealthy": true, "retries": "follow"}' "$OPS/api/state"
 
@@ -51,7 +52,7 @@ PACE=0.4 "$HERE/scenario.sh" rejection-burst
 step "09:17  Four eyes" \
   "Open the settlement alert: the escalation step waits for approval." \
   "The requester cannot approve their own step. Approve as someone else: reply 'APPROVE <code>' from" \
-  "their phone in the simulator (:8090), use the link in the approval email (:8025), or switch 'Acting as'."
+  "their phone in the simulator (:8090), use the link in the approval email (:8025), or sign in to the console as Maria Rossi."
 
 step "09:25  The counterparty recovers" \
   "counterparty-service is back; retries succeed. Resolve the remaining alerts from the queue," \
@@ -62,12 +63,12 @@ post -d '{"counterpartyHealthy": true, "retries": "follow"}' "$OPS/api/state"
 step "09:30  Evidence" \
   "Every acknowledgement, approval and action is in a hash-chained audit log." \
   "Each alert can export a Markdown incident report (alert sheet -> timeline, or /api/alerts/<id>/report)."
-curl -sS "$URL/api/audit/verify"; echo
+curl -fsS -H "Authorization: Bearer $API_TOKEN" "$URL/api/audit/verify"; echo
 
 step "17:00  Learn from the day" \
   "Kardan looks at how alerts were actually handled and proposes rule changes (Proposals page)." \
   "Someone other than the proposer reviews the diff and applies it."
-curl -sS -X POST "$URL/api/proposals/analyze" -d '{"days": 1, "minAlerts": 3}'; echo
+curl -fsS -H "Authorization: Bearer $API_TOKEN" -X POST "$URL/api/proposals/analyze" -d '{"days": 1, "minAlerts": 3}'; echo
 
 step "Bonus  A schema nobody has seen" \
   "A collateral system Kardan has never heard of starts sending margin calls." \

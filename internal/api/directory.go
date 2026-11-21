@@ -117,6 +117,10 @@ func (s *Server) deleteDirectory(kind string) http.HandlerFunc {
 		id := r.PathValue("id")
 		if kind == directory.KindPerson {
 			if origin := s.originOf("person:" + id); origin == "api" {
+				if s.SSO.hasAccount(id) {
+					writeErr(w, http.StatusConflict, "cannot remove a demo SSO account")
+					return
+				}
 				for _, t := range s.Directory().Teams {
 					for _, m := range t.Members {
 						if m == id {

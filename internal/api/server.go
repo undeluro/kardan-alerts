@@ -45,6 +45,7 @@ type Server struct {
 	DefaultWindow  time.Duration
 	Clock          *clock.Clock
 	GatewayToken   string
+	SSO            *DemoSSO
 	ChannelStates  func(r *http.Request) map[string]string // breaker state per channel
 	FX             func() *finance.FX
 	Correlation    func() *finance.Correlation
@@ -173,6 +174,18 @@ func (s *Server) transition(action string) http.HandlerFunc {
 		by := strings.TrimSpace(body.By)
 		if by == "" {
 			by = "anonymous"
+		}
+		if user := sessionUser(r); user != nil {
+			by = user.Name
+			current, err := s.Store.Get(r.Context(), r.PathValue("id"))
+			if err != nil {
+				s.fail(w, err)
+				return
+			}
+			if !s.canActOnTeam(r, current.Team) {
+				writeErr(w, http.StatusForbidden, "you are not a member of the alert's team")
+				return
+			}
 		}
 		var a *alerting.Alert
 		var err error

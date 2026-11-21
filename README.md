@@ -21,6 +21,23 @@ docker compose up --build          # first build takes ~2 minutes
 Optional: `ANTHROPIC_API_KEY=... docker compose up --build` turns on Claude assistance for teams that opt in
 (see [AI usage](docs/ai-usage.md)); everything works without it.
 
+### Demo SSO
+
+Open [the sign-in page](http://localhost:8080/login) after `make demo`. The local Compose stack uses these sample accounts.
+
+| Account | Access token | Role |
+|---|---|---|
+| Sam Okafor | `kardan-demo-sam` | Operator |
+| Maria Rossi | `kardan-demo-maria` | Administrator |
+
+The mock identity provider exchanges the access token for an HTTP-only browser session stored in Redis. Both accounts can work alerts for their teams. Maria can also edit workspace settings. The API takes the actor from the session, and a user still cannot approve a step they requested. Signing out revokes the session.
+
+The sample tokens are for a local demo. Published Compose ports bind to `127.0.0.1` by default. Set `DEMO_SSO_SAM_TOKEN` and `DEMO_SSO_MARIA_TOKEN` to change the tokens. CLI examples that call the console API use Maria's token as a Bearer credential. Ingest and notification callbacks continue to use their existing API contracts.
+
+```sh
+export DEMO_SSO_MARIA_TOKEN=kardan-demo-maria
+```
+
 ### Five-minute demo
 
 ```sh
@@ -52,11 +69,11 @@ Time-aware rules (business clock in demo mode, so you can jump past a deadline):
 
 ```sh
 ./samples/scenario.sh eod-positions          # 2 of 3 custodians deliver their end-of-day positions file
-curl -X PUT localhost:8080/api/clock -d '{"at":"2026-11-20T23:31:00Z"}'   # 18:31 New York: JPM-CUSTODY missing
+curl -H "Authorization: Bearer $DEMO_SSO_MARIA_TOKEN" -X PUT localhost:8080/api/clock -d '{"at":"2026-11-20T23:31:00Z"}'   # 18:31 New York: JPM-CUSTODY missing
 ./samples/scenario.sh eod-late-file          # the late file arrives -> alert resolves, "all clear" sent
-curl -X PUT localhost:8080/api/clock -d '{"at":"2026-11-26T23:31:00Z"}'   # Thanksgiving: NYSE holiday, nothing fires
+curl -H "Authorization: Bearer $DEMO_SSO_MARIA_TOKEN" -X PUT localhost:8080/api/clock -d '{"at":"2026-11-26T23:31:00Z"}'   # Thanksgiving: NYSE holiday, nothing fires
 ./samples/scenario.sh market-data            # price ticks; stop sending during London hours -> "no tick for 30 s"
-curl -X PUT localhost:8080/api/clock -d '{"offsetMinutes":0}'             # back to real time
+curl -H "Authorization: Bearer $DEMO_SSO_MARIA_TOKEN" -X PUT localhost:8080/api/clock -d '{"offsetMinutes":0}'             # back to real time
 ```
 
 Runbooks (Appendix B's settlement runbook runs by itself):
@@ -333,8 +350,8 @@ presentation:
 Create or change rules without touching files (YAML or JSON bodies), or dry-run one first:
 
 ```sh
-curl -s localhost:8080/api/rules -H 'Content-Type: application/yaml' --data-binary @my-rule.yaml
-curl -s localhost:8080/api/rules/test -d '{"ruleYaml": "...", "raw": "<any event text: JSON, XML, FIX, log line>"}'
+curl -s -H "Authorization: Bearer $DEMO_SSO_MARIA_TOKEN" localhost:8080/api/rules -H 'Content-Type: application/yaml' --data-binary @my-rule.yaml
+curl -s -H "Authorization: Bearer $DEMO_SSO_MARIA_TOKEN" localhost:8080/api/rules/test -d '{"ruleYaml": "...", "raw": "<any event text: JSON, XML, FIX, log line>"}'
 ```
 
 Template filters: `number`, `upper`, `lower`, `default "x"`, `truncate N`, `json`. They also work in presentation
@@ -393,7 +410,7 @@ A new kind of action is an entry in `config/actions.yaml`:
 | GET | `/api/fx` | FX rates used for money at risk |
 | GET | `/api/calendars` | calendars at business time: open/closed, holidays, next cut-offs |
 | GET | `/api/alerts/{id}` | alert + deliveries |
-| POST | `/api/alerts/{id}/ack` · `/resolve` | body `{"by": "name"}` |
+| POST | `/api/alerts/{id}/ack` · `/resolve` | actor from the demo SSO session when enabled |
 | GET | `/api/stream?team=` | server-sent events |
 | GET · POST | `/api/rules` | list / create (YAML or JSON) |
 | GET · PUT · DELETE | `/api/rules/{id}` | detail with YAML / update (`If-Match: <version>`) / delete or revert |
@@ -448,7 +465,7 @@ Summary below; the full list with what it takes to make each part real is in [do
 | Kafka | Redpanda (Kafka API compatible, single node) |
 | Market calendars | `config/calendars.yaml` with illustrative hours, cut-offs and 2026 holidays; a real deployment would load them from a reference-data service |
 | Operations systems runbooks act on | `cmd/mockops`: workflow engine, service manager, ticketing, chat, risk, market data, regions, deployments, payments hub and trading controls, with idempotency and a page to break `counterparty-service`. Real systems are entries in `config/actions.yaml` |
-| Authentication / SSO | The "acting as" box picks a person from `teams.yaml`; approvals check that person (four-eyes, team entitlement). SMS replies are identified by phone number, email links by signature. A real deployment would take identity from SSO |
+| Authentication / SSO | Seeded token accounts simulate the identity provider. Sessions, API roles, team membership and four-eyes enforcement run on the server. Real deployment would use the firm’s identity provider. |
 
 ## Roadmap
 

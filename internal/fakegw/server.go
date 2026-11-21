@@ -415,7 +415,14 @@ func (s *Server) callKardan(ctx context.Context, path string, body any, out any)
 
 // people proxies Kardan's directory so the simulator can show names.
 func (s *Server) people(w http.ResponseWriter, r *http.Request) {
-	req, _ := http.NewRequestWithContext(r.Context(), http.MethodGet, s.KardanURL+"/api/teams", nil)
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, s.KardanURL+"/api/teams", nil)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "directory is unavailable"})
+		return
+	}
+	if s.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+s.Token)
+	}
 	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
 	if err != nil {
 		writeJSON(w, http.StatusOK, map[string]any{"people": []any{}})

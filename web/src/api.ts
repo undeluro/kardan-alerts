@@ -269,6 +269,7 @@ export interface Run {
   risk: string;
   approval: "none" | "required";
   requestedBy: string;
+  requestedById?: string;
   approvedBy?: string;
   approvedAt?: string;
   decidedBy?: string;
@@ -455,6 +456,7 @@ export interface Proposal {
   alertId?: string;
   status: "open" | "accepted" | "rejected";
   createdBy: string;
+  createdById?: string;
   createdAt: string;
   decidedBy?: string;
   decidedAt?: string;
@@ -533,6 +535,20 @@ export class ApiError extends Error {
   }
 }
 
+export interface SessionUser {
+  id: string;
+  name: string;
+  admin: boolean;
+  teams: string[];
+}
+
+export interface DemoSession {
+  enabled: boolean;
+  user: SessionUser | null;
+}
+
+export const sessionExpiredEvent = "kardan:session-expired";
+
 export function getActor(): string {
   try {
     return localStorage.getItem("kardan.actor")?.trim() || "anonymous";
@@ -553,6 +569,7 @@ async function request<T>(method: string, path: string, body?: unknown, headers:
     body: body === undefined ? undefined : isText ? (body as string) : JSON.stringify(body),
   });
   if (!res.ok) {
+    if (res.status === 401 && !path.startsWith("/api/auth/")) window.dispatchEvent(new Event(sessionExpiredEvent));
     let msg = res.statusText;
     try {
       msg = ((await res.json()) as { error?: string }).error ?? msg;
@@ -572,6 +589,9 @@ const qs = (params: Record<string, string>) => {
 };
 
 export const api = {
+  session: () => request<DemoSession>("GET", "/api/auth/session"),
+  signIn: (account: string, token: string) => request<DemoSession>("POST", "/api/auth/login", { account, token }),
+  signOut: () => request<void>("POST", "/api/auth/logout"),
   info: () => request<Info>("GET", "/api/info"),
   alerts: (team: string, status: string, sort = "", incident = "") =>
     request<Alert[]>("GET", `/api/alerts${qs({ team, status, sort, incident })}`),

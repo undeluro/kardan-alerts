@@ -1,3 +1,4 @@
+import { canManageAlert, useConsoleSession } from "./ConsoleSession";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Code2, GitPullRequest, LockKeyhole, X } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -73,6 +74,8 @@ export function AlertDrawer({ id, live, now, onClose, onAction }: Props) {
     count: Math.max(current.count, live.count),
     lastSeen: Date.parse(live.lastSeen) >= Date.parse(current.lastSeen) ? live.lastSeen : current.lastSeen,
   } : current;
+  const user = useConsoleSession()?.user;
+  const canAct = alert != null && canManageAlert(user, alert.team);
   const sample = detail?.alert ?? alert;
 
   const perform = async (action: "ack" | "resolve") => {
@@ -159,7 +162,7 @@ export function AlertDrawer({ id, live, now, onClose, onAction }: Props) {
                     {(alert.fields ?? []).map((field) => <Info key={field.label} label={field.label} value={field.value} mono sensitive={field.sensitive} />)}
                   </dl>
                 </section>
-                <RunbookPanel alertId={alert.id} resolved={alert.status === "resolved"} now={now} />
+                <RunbookPanel alertId={alert.id} canAct={canAct} resolved={alert.status === "resolved"} now={now} />
                 <section className="border-b border-[var(--console-line)] p-4 sm:p-5" aria-labelledby="alert-delivery-heading">
                   <h3 id="alert-delivery-heading" className="text-sm font-semibold">Notification deliveries</h3>
                   {detail?.notifications.length === 0 && <p className="console-muted mt-2 text-sm">Shown in the live feed only (no external channels on this rule).</p>}
@@ -203,8 +206,8 @@ export function AlertDrawer({ id, live, now, onClose, onAction }: Props) {
                   }}>
                   <GitPullRequest size={15} aria-hidden="true" /> Propose a fix to this rule
                 </button>
-                {alert.status === "open" && <Button variant="primary" disabled={busy !== null} onClick={() => void perform("ack")}>{busy === "ack" ? "Acknowledging…" : "Acknowledge"}</Button>}
-                {alert.status !== "resolved" && <Button variant={alert.status === "acked" ? "primary" : "secondary"} disabled={busy !== null} onClick={() => void perform("resolve")}>{busy === "resolve" ? "Resolving…" : "Resolve alert"}</Button>}
+                {canAct && alert.status === "open" && <Button variant="primary" disabled={busy !== null} onClick={() => void perform("ack")}>{busy === "ack" ? "Acknowledging…" : "Acknowledge"}</Button>}
+                {canAct && alert.status !== "resolved" && <Button variant={alert.status === "acked" ? "primary" : "secondary"} disabled={busy !== null} onClick={() => void perform("resolve")}>{busy === "resolve" ? "Resolving…" : "Resolve alert"}</Button>}
               </div>
               {proposeError && <Notice tone="error">{proposeError}</Notice>}
             </footer>

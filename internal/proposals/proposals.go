@@ -25,6 +25,7 @@ type Proposal struct {
 	AlertID      string     `json:"alertId,omitempty"`
 	Status       string     `json:"status"`
 	CreatedBy    string     `json:"createdBy"`
+	CreatedByID  string     `json:"createdById,omitempty"`
 	CreatedAt    time.Time  `json:"createdAt"`
 	DecidedBy    string     `json:"decidedBy,omitempty"`
 	DecidedAt    *time.Time `json:"decidedAt,omitempty"`
@@ -40,12 +41,12 @@ var (
 type Store struct{ Pool *pgxpool.Pool }
 
 const cols = `id, kind, target, title, rationale, body, base_version, source, signal, coalesce(alert_id, ''), status,
-	created_by, created_at, coalesce(decided_by, ''), decided_at, decision_note`
+	created_by, created_by_id, created_at, coalesce(decided_by, ''), decided_at, decision_note`
 
 func scan(row pgx.Row) (*Proposal, error) {
 	var p Proposal
 	err := row.Scan(&p.ID, &p.Kind, &p.Target, &p.Title, &p.Rationale, &p.Body, &p.BaseVersion, &p.Source, &p.Signal,
-		&p.AlertID, &p.Status, &p.CreatedBy, &p.CreatedAt, &p.DecidedBy, &p.DecidedAt, &p.DecisionNote)
+		&p.AlertID, &p.Status, &p.CreatedBy, &p.CreatedByID, &p.CreatedAt, &p.DecidedBy, &p.DecidedAt, &p.DecisionNote)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -58,10 +59,10 @@ func (s *Store) Create(ctx context.Context, p Proposal) (*Proposal, error) {
 		alert = &p.AlertID
 	}
 	out, err := scan(s.Pool.QueryRow(ctx, `INSERT INTO proposals
-		(id, kind, target, title, rationale, body, base_version, source, signal, alert_id, created_by)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+		(id, kind, target, title, rationale, body, base_version, source, signal, alert_id, created_by, created_by_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 		ON CONFLICT (kind, target, signal) WHERE status = 'open' AND signal <> '' DO NOTHING
-		RETURNING `+cols, p.ID, p.Kind, p.Target, p.Title, p.Rationale, p.Body, p.BaseVersion, p.Source, p.Signal, alert, p.CreatedBy))
+		RETURNING `+cols, p.ID, p.Kind, p.Target, p.Title, p.Rationale, p.Body, p.BaseVersion, p.Source, p.Signal, alert, p.CreatedBy, p.CreatedByID))
 	if errors.Is(err, ErrNotFound) {
 		return nil, ErrExists
 	}

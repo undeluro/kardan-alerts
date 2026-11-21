@@ -1,4 +1,4 @@
-import { ArrowRight, BellRing, BookOpenCheck, Cable, CalendarClock, Clock3, Compass, Database, GitPullRequest, Moon, Radio, ScrollText, Send, SlidersHorizontal, Sun, Users, UserRound } from "lucide-react";
+import { ArrowRight, BellRing, BookOpenCheck, Cable, CalendarClock, Clock3, Compass, Database, GitPullRequest, LogOut, Moon, Radio, ScrollText, Send, SlidersHorizontal, Sun, Users, UserRound } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { api, type ClockState, type SchemaNotice, type Team } from "./api";
 import { AlertsPage } from "./pages/AlertsPage";
@@ -18,7 +18,8 @@ import { SchemaDetail } from "./pages/SchemaDetail";
 import { SchemasPage } from "./pages/SchemasPage";
 import { SourcesPage } from "./pages/SourcesPage";
 import { Link, navigate, useLocation } from "./router";
-import { FinanceChip } from "./ui";
+import { useConsoleSession } from "./ConsoleSession";
+import { Badge, Button, FinanceChip, Notice } from "./ui";
 import { useLiveAlerts, type Connection, type SortOrder, type StatusFilter } from "./useLiveAlerts";
 
 const store = {
@@ -40,19 +41,22 @@ const store = {
 
 const NAV = [
   { to: "/", label: "Alerts", icon: BellRing, match: (p: string) => p === "/" || p.startsWith("/alerts") || p.startsWith("/incidents") },
-  { to: "/rules", label: "Rules", icon: SlidersHorizontal, match: (p: string) => p.startsWith("/rules") },
-  { to: "/schemas", label: "Schemas", icon: Database, match: (p: string) => p.startsWith("/schemas") },
+  { to: "/rules", management: true, label: "Rules", icon: SlidersHorizontal, match: (p: string) => p.startsWith("/rules") },
+  { to: "/schemas", management: true, label: "Schemas", icon: Database, match: (p: string) => p.startsWith("/schemas") },
   { to: "/sources", label: "Sources", icon: Cable, match: (p: string) => p.startsWith("/sources") },
-  { to: "/runbooks", label: "Runbooks", icon: BookOpenCheck, match: (p: string) => p.startsWith("/runbooks") },
+  { to: "/runbooks", management: true, label: "Runbooks", icon: BookOpenCheck, match: (p: string) => p.startsWith("/runbooks") },
   { to: "/markets", label: "Markets", icon: CalendarClock, match: (p: string) => p.startsWith("/markets") },
   { to: "/deliveries", label: "Deliveries", icon: Send, match: (p: string) => p.startsWith("/deliveries") },
-  { to: "/teams", label: "Teams", icon: Users, match: (p: string) => p.startsWith("/teams") || p.startsWith("/onboarding") },
-  { to: "/proposals", label: "Proposals", icon: GitPullRequest, match: (p: string) => p.startsWith("/proposals") },
+  { to: "/teams", management: true, label: "Teams", icon: Users, match: (p: string) => p.startsWith("/teams") || p.startsWith("/onboarding") },
+  { to: "/proposals", management: true, label: "Proposals", icon: GitPullRequest, match: (p: string) => p.startsWith("/proposals") },
   { to: "/audit", label: "Audit", icon: ScrollText, match: (p: string) => p.startsWith("/audit") },
 ];
 
 export default function App() {
   const { path } = useLocation();
+  const session = useConsoleSession();
+  const user = session?.user;
+  const [signingOut, setSigningOut] = useState(false);
   const [team, setTeam] = useState(() => store.get("kardan.team", ""));
   const [filter, setFilter] = useState<StatusFilter>("active");
   const [sort, setSort] = useState<SortOrder>(() => (store.get("kardan.sort", "impact") as SortOrder) || "impact");
@@ -66,7 +70,8 @@ export default function App() {
     window.history.replaceState(null, "", url);
   }, []);
   const [theme, setTheme] = useState(() => store.get("kardan.theme", "dark") === "light" ? "light" : "dark");
-  const [actor, setActor] = useState(() => store.get("kardan.actor", ""));
+  const [legacyActor, setActor] = useState(() => store.get("kardan.actor", ""));
+  const actor = user?.name ?? legacyActor;
   const [teams, setTeams] = useState<Team[]>([]);
   const [now, setNow] = useState(Date.now());
   const [toast, setToast] = useState<string | null>(null);
@@ -105,7 +110,7 @@ export default function App() {
     api.teams().then((d) => setTeams(d.teams)).catch(() => setTeams([]));
   }, []);
   useEffect(() => store.set("kardan.team", team), [team]);
-  useEffect(() => store.set("kardan.actor", actor), [actor]);
+  useEffect(() => store.set("kardan.actor", legacyActor), [legacyActor]);
   useEffect(() => store.set("kardan.sort", sort), [sort]);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -122,8 +127,15 @@ export default function App() {
   const runbookMatch = path.match(/^\/runbooks\/(.+)$/);
   const incidentMatch = path.match(/^\/incidents\/(.+)$/);
 
+  const managementOnly = user && !user.admin;
   let page;
-  if (path === "/rules") page = <RulesPage />;
+  if (managementOnly && NAV.some((item) => item.management && item.match(path))) {
+    page = <div className="space-y-3">
+      <h1 className="text-xl font-semibold">Administrator access required</h1>
+      <Notice>This page is for managing workspace settings.</Notice>
+      <Link to="/" className="text-[var(--console-accent)] hover:underline">Back to alerts</Link>
+    </div>;
+  } else if (path === "/rules") page = <RulesPage />;
   else if (path === "/rules/new") page = <RuleEditor key="new" id={null} teams={teams} />;
   else if (ruleMatch) page = <RuleEditor key={ruleMatch[1]} id={decodeURIComponent(ruleMatch[1])} teams={teams} />;
   else if (path === "/schemas") page = <SchemasPage now={now} />;
@@ -187,7 +199,7 @@ export default function App() {
           Kardan
         </Link>
         <nav aria-label="Workspace" className="console-nav">
-          {NAV.map(({ to, label, icon: Icon, match }) => (
+          {NAV.filter((item) => !managementOnly || !item.management).map(({ to, label, icon: Icon, match }) => (
             <Link key={to} to={to} aria-current={match(path) ? "page" : undefined} className="console-nav-item">
               <Icon size={17} aria-hidden="true" />
               {label}
@@ -200,7 +212,7 @@ export default function App() {
         <header className="console-topbar">
           <div className="flex min-w-0 flex-wrap items-center gap-3">
             <LiveIndicator connection={connection} />
-            {clock && clock.offsetMinutes !== 0 && (
+            {(!user || user.admin) && clock && clock.offsetMinutes !== 0 && (
               <Link to="/teams" className="inline-flex items-center gap-1 rounded-md bg-amber-100 px-2 py-1 text-xs font-medium text-amber-900 dark:bg-amber-500/20 dark:text-amber-200">
                 <Clock3 size={13} aria-hidden="true" />
                 Simulated {new Date(clock.now).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}
@@ -208,16 +220,27 @@ export default function App() {
             )}
           </div>
           <div className="flex items-center gap-2">
-            <label className="console-actor">
-              <UserRound size={15} aria-hidden="true" />
-              <span className="hidden sm:inline">Acting as</span>
-              <input
-                aria-label="Acting as"
-                value={actor}
-                onChange={(e) => setActor(e.target.value)}
-                placeholder="Your name"
-              />
-            </label>
+            {user && session ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="console-actor">
+                  <UserRound size={15} aria-hidden="true" />
+                  <span>{user.name}</span>
+                </span>
+                <Badge className="hidden ring-[var(--console-line)] sm:inline-flex">{user.admin ? "Administrator" : "Operator"}</Badge>
+                <Button disabled={signingOut} onClick={() => {
+                  setSigningOut(true);
+                  void session.signOut().catch((error: Error) => showToast(error.message)).finally(() => setSigningOut(false));
+                }}>
+                  <LogOut size={14} aria-hidden="true" /> {signingOut ? "Signing out…" : "Sign out"}
+                </Button>
+              </div>
+            ) : (
+              <label className="console-actor">
+                <UserRound size={15} aria-hidden="true" />
+                <span className="hidden sm:inline">Acting as</span>
+                <input aria-label="Acting as" value={legacyActor} onChange={(e) => setActor(e.target.value)} placeholder="Your name" />
+              </label>
+            )}
             <button type="button" className="console-theme"
               aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
               title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
@@ -230,7 +253,7 @@ export default function App() {
       </div>
 
       <div className="pointer-events-none fixed right-4 bottom-4 z-50 flex w-[min(20rem,calc(100%-2rem))] flex-col gap-2">
-        {schemaNotices.map((s) => (
+        {!managementOnly && schemaNotices.map((s) => (
           <button
             key={s.id}
             onClick={() => {

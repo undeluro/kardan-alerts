@@ -247,6 +247,10 @@ func (s *Server) createProposal(w http.ResponseWriter, r *http.Request) {
 		p.Source = "person"
 	}
 	p.Signal, p.ID, p.CreatedBy = "", event.NewID(), actor(r)
+	p.CreatedByID = ""
+	if user := sessionUser(r); user != nil {
+		p.CreatedByID = user.ID
+	}
 	if err := s.checkProposal(r, &p); err != nil {
 		writeErr(w, http.StatusUnprocessableEntity, err.Error())
 		return
@@ -314,7 +318,11 @@ func (s *Server) decideProposal(accept bool) http.HandlerFunc {
 			s.fail(w, err)
 			return
 		}
-		if accept && strings.EqualFold(p.CreatedBy, by) {
+		self := strings.EqualFold(p.CreatedBy, by)
+		if user := sessionUser(r); user != nil && p.CreatedByID != "" {
+			self = user.ID == p.CreatedByID
+		}
+		if accept && self {
 			writeErr(w, http.StatusForbidden, "someone other than the proposer must accept it")
 			return
 		}

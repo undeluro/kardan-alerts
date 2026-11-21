@@ -24,32 +24,33 @@ const (
 
 // Run is one execution of a runbook step.
 type Run struct {
-	ID          string            `json:"id"`
-	Code        string            `json:"code"` // for SMS replies: APPROVE <code>
-	AlertID     string            `json:"alertId"`
-	RunbookID   string            `json:"runbookId"`
-	Step        int               `json:"step"`
-	Kind        string            `json:"kind"`
-	Action      string            `json:"action,omitempty"`
-	Label       string            `json:"label"`
-	Params      map[string]string `json:"params,omitempty"`
-	Status      string            `json:"status"`
-	Risk        string            `json:"risk"`
-	Approval    string            `json:"approval"`
-	RequestedBy string            `json:"requestedBy"`
-	ApprovedBy  *string           `json:"approvedBy,omitempty"`
-	ApprovedAt  *time.Time        `json:"approvedAt,omitempty"`
-	DecidedBy   *string           `json:"decidedBy,omitempty"`
-	Reason      string            `json:"reason,omitempty"`
-	Attempts    int               `json:"attempts"`
-	MaxAttempts int               `json:"maxAttempts"`
-	RepeatEvery int64             `json:"repeatEveryMs,omitempty"`
-	NotBefore   time.Time         `json:"notBefore"`
-	Notified    bool              `json:"-"`
-	Output      string            `json:"output,omitempty"`
-	CreatedAt   time.Time         `json:"createdAt"`
-	UpdatedAt   time.Time         `json:"updatedAt"`
-	FinishedAt  *time.Time        `json:"finishedAt,omitempty"`
+	ID            string            `json:"id"`
+	Code          string            `json:"code"` // for SMS replies: APPROVE <code>
+	AlertID       string            `json:"alertId"`
+	RunbookID     string            `json:"runbookId"`
+	Step          int               `json:"step"`
+	Kind          string            `json:"kind"`
+	Action        string            `json:"action,omitempty"`
+	Label         string            `json:"label"`
+	Params        map[string]string `json:"params,omitempty"`
+	Status        string            `json:"status"`
+	Risk          string            `json:"risk"`
+	Approval      string            `json:"approval"`
+	RequestedBy   string            `json:"requestedBy"`
+	RequestedByID string            `json:"requestedById,omitempty"`
+	ApprovedBy    *string           `json:"approvedBy,omitempty"`
+	ApprovedAt    *time.Time        `json:"approvedAt,omitempty"`
+	DecidedBy     *string           `json:"decidedBy,omitempty"`
+	Reason        string            `json:"reason,omitempty"`
+	Attempts      int               `json:"attempts"`
+	MaxAttempts   int               `json:"maxAttempts"`
+	RepeatEvery   int64             `json:"repeatEveryMs,omitempty"`
+	NotBefore     time.Time         `json:"notBefore"`
+	Notified      bool              `json:"-"`
+	Output        string            `json:"output,omitempty"`
+	CreatedAt     time.Time         `json:"createdAt"`
+	UpdatedAt     time.Time         `json:"updatedAt"`
+	FinishedAt    *time.Time        `json:"finishedAt,omitempty"`
 }
 
 // Final reports whether the run will not change any more.
@@ -62,14 +63,14 @@ func (r *Run) Final() bool {
 }
 
 const runColumns = `id, alert_id, runbook_id, step, kind, action, label, params, status, risk, approval,
-	requested_by, approved_by, approved_at, decided_by, reason, attempts, max_attempts, repeat_every,
+	requested_by, requested_by_id, approved_by, approved_at, decided_by, reason, attempts, max_attempts, repeat_every,
 	not_before, notified, output, created_at, updated_at, finished_at`
 
 func scanRun(row pgx.Row) (*Run, error) {
 	var r Run
 	var params []byte
 	err := row.Scan(&r.ID, &r.AlertID, &r.RunbookID, &r.Step, &r.Kind, &r.Action, &r.Label, &params, &r.Status,
-		&r.Risk, &r.Approval, &r.RequestedBy, &r.ApprovedBy, &r.ApprovedAt, &r.DecidedBy, &r.Reason, &r.Attempts,
+		&r.Risk, &r.Approval, &r.RequestedBy, &r.RequestedByID, &r.ApprovedBy, &r.ApprovedAt, &r.DecidedBy, &r.Reason, &r.Attempts,
 		&r.MaxAttempts, &r.RepeatEvery, &r.NotBefore, &r.Notified, &r.Output, &r.CreatedAt, &r.UpdatedAt, &r.FinishedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -119,10 +120,10 @@ func InsertRun(ctx context.Context, q Execer, r *Run) error {
 		finished = &now
 	}
 	_, err := q.Exec(ctx, `INSERT INTO action_runs (id, alert_id, runbook_id, step, kind, action, label, params, status,
-		risk, approval, requested_by, decided_by, reason, max_attempts, repeat_every, not_before, output, finished_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
+		risk, approval, requested_by, requested_by_id, decided_by, reason, max_attempts, repeat_every, not_before, output, finished_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
 		r.ID, r.AlertID, r.RunbookID, r.Step, r.Kind, r.Action, r.Label, params, r.Status, r.Risk, r.Approval,
-		r.RequestedBy, r.DecidedBy, r.Reason, r.MaxAttempts, r.RepeatEvery, r.NotBefore, r.Output, finished)
+		r.RequestedBy, r.RequestedByID, r.DecidedBy, r.Reason, r.MaxAttempts, r.RepeatEvery, r.NotBefore, r.Output, finished)
 	r.Code = ShortCode(r.ID)
 	return err
 }

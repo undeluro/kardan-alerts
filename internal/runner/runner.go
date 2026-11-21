@@ -211,7 +211,7 @@ func (r *Runner) Request(ctx context.Context, tx pgx.Tx, a *alerting.Alert, rb *
 		}
 	}
 	run := &alerting.Run{ID: event.NewID(), AlertID: a.ID, RunbookID: rb.ID, Step: step, Kind: f.Kind,
-		Label: f.Text, RequestedBy: actor, Risk: actions.RiskLow, Approval: "none"}
+		Label: f.Text, RequestedBy: actor, RequestedByID: opts.RequesterID, Risk: actions.RiskLow, Approval: "none"}
 	reg := r.Actions()
 	if f.Action == "" {
 		// Manual: someone did it (or confirms the check).
@@ -272,7 +272,8 @@ func (r *Runner) Request(ctx context.Context, tx pgx.Tx, a *alerting.Alert, rb *
 
 // RequestOptions tweaks a request.
 type RequestOptions struct {
-	Skip string // record the step as skipped with this reason instead of running it
+	RequesterID string
+	Skip        string // record the step as skipped with this reason instead of running it
 }
 
 // ---- auto-run progression ------------------------------------------------------
@@ -330,11 +331,17 @@ func CheckApprover(dir *directory.Directory, run *alerting.Run, team, approver s
 	if !ok {
 		return p, ErrUnknownPerson
 	}
-	if req, ok := dir.Find(run.RequestedBy); ok && req.ID == p.ID {
-		return p, ErrSelfApproval
-	}
-	if strings.EqualFold(run.RequestedBy, p.Name) || strings.EqualFold(run.RequestedBy, p.ID) {
-		return p, ErrSelfApproval
+	if run.RequestedByID != "" {
+		if run.RequestedByID == p.ID {
+			return p, ErrSelfApproval
+		}
+	} else {
+		if req, ok := dir.Find(run.RequestedBy); ok && req.ID == p.ID {
+			return p, ErrSelfApproval
+		}
+		if strings.EqualFold(run.RequestedBy, p.Name) || strings.EqualFold(run.RequestedBy, p.ID) {
+			return p, ErrSelfApproval
+		}
 	}
 	if run.Risk == actions.RiskHigh && !dir.IsMember(team, p.ID) {
 		return p, ErrNotEntitled

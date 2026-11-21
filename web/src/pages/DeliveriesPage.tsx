@@ -1,3 +1,4 @@
+import { canManageAlert, useConsoleSession } from "../ConsoleSession";
 import { ArrowUpRight } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { api, type ChannelView, type Delivery, type Info } from "../api";
@@ -12,6 +13,7 @@ const FILTERS = [
 ] as const;
 
 export function DeliveriesPage({ now, onToast }: { now: number; onToast: (m: string) => void }) {
+  const user = useConsoleSession()?.user;
   const [channels, setChannels] = useState<ChannelView[]>([]);
   const [items, setItems] = useState<Delivery[] | null>(null);
   const [status, setStatus] = useState<string>("");
@@ -154,7 +156,7 @@ export function DeliveriesPage({ now, onToast }: { now: number; onToast: (m: str
             </div>
             <div className="flex shrink-0 items-center gap-2 text-xs text-gray-500">
               <span>{timeAgo(d.sentAt ?? d.createdAt, now)}</span>
-              {(d.status === "dead" || d.status === "retry") && (
+              {canManageAlert(user, d.alertTeam) && (d.status === "dead" || d.status === "retry") && (
                 <Button onClick={() => void resend(d)}>{d.status === "dead" ? "Re-send" : "Retry now"}</Button>
               )}
             </div>

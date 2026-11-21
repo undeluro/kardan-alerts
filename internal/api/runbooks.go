@@ -301,9 +301,11 @@ func (s *Server) requestStep(w http.ResponseWriter, r *http.Request) {
 		Skip string `json:"skip"`
 	}
 	_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body)
-	by := strings.TrimSpace(body.By)
-	if by == "" {
-		by = actor(r)
+	by := actionActor(r, body.By)
+	opts := runner.RequestOptions{Skip: strings.TrimSpace(body.Skip)}
+	if user := sessionUser(r); user != nil {
+		by = user.ID
+		opts.RequesterID = user.ID
 	}
 	if p, ok := s.Directory().Find(by); ok {
 		by = p.Name
@@ -314,6 +316,10 @@ func (s *Server) requestStep(w http.ResponseWriter, r *http.Request) {
 	a, err := s.Store.Get(r.Context(), r.PathValue("id"))
 	if err != nil {
 		s.fail(w, err)
+		return
+	}
+	if !s.canActOnTeam(r, a.Team) {
+		writeErr(w, http.StatusForbidden, "you are not a member of the alert's team")
 		return
 	}
 	if a.Status == alerting.StatusResolved {
@@ -332,7 +338,7 @@ func (s *Server) requestStep(w http.ResponseWriter, r *http.Request) {
 	}
 	var run *alerting.Run
 	err = pgx.BeginFunc(r.Context(), s.Store.Pool, func(tx pgx.Tx) error {
-		run, err = s.Runner.Request(r.Context(), tx, a, rb, n, by, runner.RequestOptions{Skip: strings.TrimSpace(body.Skip)})
+		run, err = s.Runner.Request(r.Context(), tx, a, rb, n, by, opts)
 		return err
 	})
 	switch {
@@ -359,10 +365,7 @@ func (s *Server) decide(approve bool) http.HandlerFunc {
 			Reason string `json:"reason"`
 		}
 		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096)).Decode(&body)
-		by := strings.TrimSpace(body.By)
-		if by == "" {
-			by = actor(r)
-		}
+		by := actionActor(r, body.By)
 		run, status, err := s.decideRun(r, r.PathValue("id"), by, approve, body.Reason, "ui")
 		if err != nil {
 			writeErr(w, status, err.Error())
@@ -389,7 +392,14 @@ func (s *Server) decideRun(r *http.Request, runID, by string, approve bool, reas
 	if a.Status == alerting.StatusResolved {
 		return nil, http.StatusConflict, errors.New("the alert is already resolved")
 	}
-	p, err := runner.CheckApprover(s.Directory(), run, a.Team, by)
+	if !s.canActOnTeam(r, a.Team) {
+		return nil, http.StatusForbidden, errors.New("you are not a member of the alert's team")
+	}
+	approver := by
+	if user := sessionUser(r); user != nil {
+		approver = user.ID
+	}
+	p, err := runner.CheckApprover(s.Directory(), run, a.Team, approver)
 	if err != nil {
 		s.record(r, audit.Event{Actor: by, Action: "action.approval_refused", Subject: "run:" + run.ID,
 			Detail: map[string]any{"alert": a.ID, "reason": err.Error(), "via": via}})

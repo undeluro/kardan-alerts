@@ -85,4 +85,4 @@ in a browser (the onboarding wizard, rule builder, backtests, proposals and the 
 | Provider webhooks | Inbound SMS/call webhooks require the shared gateway token; approval links are HMAC-signed, single use, 24 h |
 | Incident reports | Exported reports leave out raw event payloads, which can hold unmasked data |
 | Runtime image | Distroless, non-root, no shell |
-| Identity | Demo uses an "acting as" name; a real deployment takes identity from SSO and maps it to people in the directory |
+| Identity | The demo uses seeded access-token accounts with server-side sessions. A deployed integration would take identity from corporate SSO and map it to people in the directory. |

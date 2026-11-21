@@ -187,13 +187,18 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		g.Go(func() error { return d.Run(ctx) })
 	}
 
+	var sso *api.DemoSSO
 	if cfg.Has(config.RoleAPI) {
+		if cfg.DemoSSO {
+			sso = api.NewDemoSSO(rdb, reloader.Directory, cfg.DemoSamToken, cfg.DemoMariaToken, cfg.GatewayToken, strings.HasPrefix(cfg.PublicURL, "https://"))
+		}
+		sso.Register(mux)
 		hub := &api.Hub{Redis: rdb, Log: log.With("component", "live")}
 		g.Go(func() error { return hub.Run(ctx) })
 		srv := &api.Server{
 			Store: store, Publisher: publisher, Engine: engine, RuleStore: ruleStore, Schemas: schemas,
 			Directory: reloader.Directory, ConfigErrors: reloader.Errors, DefaultWindow: cfg.DedupWindow,
-			Clock: biz, GatewayToken: cfg.GatewayToken, FX: reloader.FX, Correlation: reloader.Correlation,
+			Clock: biz, GatewayToken: cfg.GatewayToken, FX: reloader.FX, Correlation: reloader.Correlation, SSO: sso,
 			Calendars: reloader.Calendars, CheckRule: reloader.checkCalendars,
 			Runner: run, Runbooks: rbHolder, RunbookStore: rbStore, Actions: reloader.Actions, Audit: auditLog,
 			ApprovalSecret: cfg.ApprovalSecret,
@@ -221,7 +226,7 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		srv.Register(mux)
 	}
 
-	httpSrv := &http.Server{Addr: cfg.HTTPAddr, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	httpSrv := &http.Server{Addr: cfg.HTTPAddr, Handler: sso.Protect(mux), ReadHeaderTimeout: 10 * time.Second}
 	g.Go(func() error {
 		log.Info("http listening", "addr", cfg.HTTPAddr)
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

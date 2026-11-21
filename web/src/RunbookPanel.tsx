@@ -1,3 +1,4 @@
+import { useConsoleSession } from "./ConsoleSession";
 import { ArrowUpRight } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { api, getActor, type AuditEntry, type Run, type RunbookView, type StepView } from "./api";
@@ -54,12 +55,13 @@ const chip = "bg-gray-50 text-gray-600 ring-gray-300 dark:bg-gray-800 dark:text-
 const final = (r?: Run) => !r || ["succeeded", "failed", "rejected", "done", "skipped"].includes(r.status);
 
 /** The alert's runbooks with live step state, and the audit timeline. */
-export function RunbookPanel({ alertId, resolved, now }: { alertId: string; resolved: boolean; now: number }) {
+export function RunbookPanel({ alertId, resolved, now, canAct }: { alertId: string; resolved: boolean; now: number; canAct: boolean }) {
   const [views, setViews] = useState<RunbookView[] | null>(null);
   const [timeline, setTimeline] = useState<AuditEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
-  const actor = getActor();
+  const user = useConsoleSession()?.user;
+  const actor = user?.name ?? getActor();
   const anonymous = actor === "anonymous";
 
   const load = useCallback(() => {
@@ -99,8 +101,8 @@ export function RunbookPanel({ alertId, resolved, now }: { alertId: string; reso
         {views === null && <p className="mt-2 text-sm text-gray-500">Loading…</p>}
         {views?.length === 0 && (
           <p className="mt-2 text-sm text-gray-500">
-            No runbook is attached to this alert. Add one on the <a href="/runbooks" className="text-amber-600 hover:underline">Runbooks</a> page:
-            paste Markdown, a checklist, a link or plain text.
+            No runbook is attached to this alert.
+            {(!user || user.admin) && <> Add one on the <a href="/runbooks" className="text-amber-600 hover:underline">Runbooks</a> page.</>}
           </p>
         )}
         {anonymous && views && views.length > 0 && !resolved && (
@@ -134,8 +136,10 @@ export function RunbookPanel({ alertId, resolved, now }: { alertId: string; reso
                   s={s}
                   now={now}
                   resolved={resolved}
+                  canAct={canAct}
                   busy={busy}
                   actor={actor}
+                  actorId={user?.id}
                   onRun={() => act(`run-${v.id}-${s.index}`, () => api.runStep(alertId, v.id, s.index, actor))}
                   onApprove={(id) => act(`ok-${id}`, () => api.approve(id, actor))}
                   onReject={(id) => act(`no-${id}`, () => api.reject(id, actor))}
@@ -182,8 +186,10 @@ function Step({
   s,
   now,
   resolved,
+  canAct,
   busy,
   actor,
+  actorId,
   onRun,
   onApprove,
   onReject,
@@ -192,8 +198,10 @@ function Step({
   s: StepView;
   now: number;
   resolved: boolean;
+  canAct: boolean;
   busy: string | null;
   actor: string;
+  actorId?: string;
   onRun: () => void;
   onApprove: (id: string) => void;
   onReject: (id: string) => void;
@@ -202,7 +210,7 @@ function Step({
   const r = s.run;
   const manual = !s.action;
   const active = r && !final(r);
-  const isRequester = r && sameName(r.requestedBy, actor);
+  const isRequester = r && (r.requestedById && actorId ? r.requestedById === actorId : sameName(r.requestedBy, actor));
   return (
     <li className="flex gap-3">
       <span
@@ -253,7 +261,7 @@ function Step({
                 <span className="text-gray-600 dark:text-gray-300">
                   A second person must approve (SMS: <b className="font-mono">APPROVE {r.code}</b>).
                 </span>
-                {!resolved && (
+                {canAct && !resolved && (
                   <>
                     <Button onClick={() => onApprove(r.id)} variant="primary" disabled={busy !== null || !!isRequester}>
                       Approve
@@ -269,7 +277,7 @@ function Step({
             {(r.output || r.reason) && <div className="mt-1 font-mono break-words text-gray-700 dark:text-gray-300">{r.output || r.reason}</div>}
           </div>
         )}
-        {!resolved && !active && (
+        {canAct && !resolved && !active && (
           <div className="mt-1.5">
             {manual && r?.status !== "done" && (
               <Button onClick={onRun} disabled={busy === `run-${keyPrefix}` || actor === "anonymous"}>

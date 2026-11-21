@@ -176,7 +176,19 @@ func (s *Server) listDeliveries(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) resend(w http.ResponseWriter, r *http.Request) {
-	err := s.Store.Resend(r.Context(), r.PathValue("id"))
+	id := r.PathValue("id")
+	if sessionUser(r) != nil {
+		alert, _, err := s.Store.NotificationAlert(r.Context(), id)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		if !s.canActOnTeam(r, alert.Team) {
+			writeErr(w, http.StatusForbidden, "you are not a member of the alert's team")
+			return
+		}
+	}
+	err := s.Store.Resend(r.Context(), id)
 	if errors.Is(err, alerting.ErrNotFound) {
 		writeErr(w, http.StatusConflict, "only dead, waiting or parked deliveries can be re-sent")
 		return

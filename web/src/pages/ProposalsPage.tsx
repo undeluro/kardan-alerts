@@ -1,3 +1,4 @@
+import { useConsoleSession } from "../ConsoleSession";
 import * as Dialog from "@radix-ui/react-dialog";
 import { Check, ChevronDown, ChevronRight, GitPullRequest, Radar, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
@@ -74,7 +75,11 @@ function ProposalCard({ p, now, expanded, onToggle, onDecided }: {
   useEffect(() => {
     if (expanded && current === null) api.proposal(p.id).then((d) => setCurrent(d.current)).catch(() => setCurrent(""));
   }, [expanded, current, p.id]);
-  const me = getActor();
+  const user = useConsoleSession()?.user;
+  const me = user?.name ?? getActor();
+  const ownProposal = user && p.createdById
+    ? user.id === p.createdById
+    : me.toLowerCase() === p.createdBy.toLowerCase();
   const decide = async (accept: boolean) => {
     setBusy(true);
     setError(null);
@@ -122,9 +127,9 @@ function ProposalCard({ p, now, expanded, onToggle, onDecided }: {
               {error && <Notice tone="error">{error}</Notice>}
               <input aria-label="Review note" className={inputClass} placeholder="Note for the record (optional)" value={note} onChange={(e) => setNote(e.target.value)} />
               <div className="flex flex-wrap items-center justify-end gap-2">
-                {me === p.createdBy && <span className="console-muted text-xs">You proposed this; someone else has to accept it.</span>}
+                {ownProposal && <span className="console-muted text-xs">You proposed this; someone else has to accept it.</span>}
                 <Button disabled={busy} onClick={() => void decide(false)}><X size={14} aria-hidden="true" /> Reject</Button>
-                <Button variant="primary" disabled={busy || me === p.createdBy || me === "anonymous"} onClick={() => void decide(true)}>
+                <Button variant="primary" disabled={busy || ownProposal || me === "anonymous"} onClick={() => void decide(true)}>
                   <Check size={14} aria-hidden="true" /> Accept and apply
                 </Button>
               </div>

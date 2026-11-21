@@ -13,7 +13,7 @@ Kardan talks to.
 | Operations systems that runbooks act on (workflow engine, service manager, ticketing, chat, risk, market-data feeds, regions, deployments, payments hub, trading controls) | **`cmd/mockops`**, with idempotency, a state page and switches to break `counterparty-service` | Entries in `config/actions.yaml` pointing at the real endpoints (host allow-list applies) |
 | Market and payment calendars, cut-offs | `config/calendars.yaml` with illustrative hours, cut-offs and 2026 holidays | Load from a reference-data service |
 | FX rates | `config/fx.yaml`, static | Feed from a rates source (the file reloads live) |
-| Identity / SSO | An "Acting as" name in the UI mapped to people in the directory; approvals, entitlements and four-eyes checks run on the server against that name. SMS replies are identified by phone number, email approval links by HMAC signature | Take identity from SSO (OIDC headers or tokens) instead of the free-text name |
+| Identity / SSO | Seeded accounts use demo access tokens. Browser sessions live in Redis, and the API checks the session, role, team membership, and four-eyes approvals. SMS replies are identified by phone number; email approval links are signed. | Verify OIDC tokens from the company identity provider and map claims to directory people and roles. |
 | Claude | Real API when `ANTHROPIC_API_KEY` is set; otherwise the built-in readers | Set the key and opt teams in |
 | Business clock | Real clock, with a shared offset in demo mode so schedules and cut-offs can be shown at "21:00" or "next week" | Turn off `DEMO_MODE` |
 

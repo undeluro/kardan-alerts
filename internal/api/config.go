@@ -20,8 +20,11 @@ import (
 	"github.com/undeluro/kardan-alerts/internal/tmpl"
 )
 
-// actor names who made a change (the UI sends its "acting as" name).
+// actor returns the authenticated identity when demo SSO is enabled.
 func actor(r *http.Request) string {
+	if user := sessionUser(r); user != nil {
+		return user.Name
+	}
 	if v := strings.TrimSpace(r.Header.Get("X-User")); v != "" {
 		return v
 	}
