@@ -1,19 +1,27 @@
+import { Pencil, Plus, Rocket, Undo2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
-import { api, type ClockState, type OnCallNow, type Person, type Preference, type Team } from "../api";
+import { api, type ClockState, type OnCallNow, type Origin, type Person, type Preference, type Team } from "../api";
+import { PersonSheet, TeamSheet } from "../DirectoryEditors";
+import { Link } from "../router";
 import { Badge, Button, Card, ChannelIcon, Notice, PageHeader, channelLabel } from "../ui";
 
-export function TeamsPage({ onClockChange }: { onClockChange: () => void }) {
+type Editing = { kind: "person"; value: Person | null } | { kind: "team"; value: Team | null } | null;
+
+export function TeamsPage({ onClockChange, onToast }: { onClockChange: () => void; onToast: (m: string) => void }) {
   const [teams, setTeams] = useState<Team[]>([]);
   const [people, setPeople] = useState<Map<string, Person>>(new Map());
   const [defaults, setDefaults] = useState<Preference[]>([]);
   const [onCall, setOnCall] = useState<OnCallNow[]>([]);
   const [clock, setClock] = useState<ClockState | null>(null);
+  const [editable, setEditable] = useState(false);
+  const [editing, setEditing] = useState<Editing>(null);
 
   const load = useCallback(() => {
     api.teams().then((d) => {
       setTeams(d.teams);
       setPeople(new Map(d.people.map((p) => [p.id, p])));
       setDefaults(d.defaultPreferences ?? []);
+      setEditable(!!d.editable);
     });
     api.onCall().then((d) => setOnCall(d.onCall));
     api.clock().then(setClock);
@@ -32,6 +40,23 @@ export function TeamsPage({ onClockChange }: { onClockChange: () => void }) {
     load();
   };
 
+  const revert = async (kind: "person" | "team", id: string, origin?: Origin) => {
+    const what = origin === "api" ? `Delete ${kind} ${id}? It was created in the UI.` : `Discard UI edits to ${kind} ${id} and use teams.yaml again?`;
+    if (!window.confirm(what)) return;
+    try {
+      await (kind === "team" ? api.revertTeam(id) : api.revertPerson(id));
+      onToast(origin === "api" ? `${kind} ${id} deleted` : `${kind} ${id} restored from teams.yaml`);
+      load();
+    } catch (e) {
+      onToast((e as Error).message);
+    }
+  };
+  const saved = (msg: string) => {
+    setEditing(null);
+    onToast(msg);
+    load();
+  };
+
   const oc = new Map(onCall.map((o) => [o.team, o]));
   const now = clock ? new Date(clock.now) : new Date();
 
@@ -39,7 +64,16 @@ export function TeamsPage({ onClockChange }: { onClockChange: () => void }) {
     <>
       <PageHeader
         title="Teams & on-call"
-        subtitle="Who gets what, when. Rules can route to a team, to whoever is on call (rotation or follow-the-sun), or to a person's own preferences: severity and working hours in their time zone. Edit config/teams.yaml; changes apply live."
+        subtitle="Who gets what, when. Rules route to a team, to whoever is on call (rotation or follow-the-sun), or to a person's own preferences: severity and working hours in their time zone. Edit here or in config/teams.yaml; changes apply live."
+        actions={editable && (
+          <>
+            <Link to="/onboarding" className="console-button-secondary inline-flex min-h-8 items-center gap-2 rounded-sm px-3 py-1.5 text-sm font-medium">
+              <Rocket size={14} aria-hidden="true" /> Onboard a team
+            </Link>
+            <Button onClick={() => setEditing({ kind: "person", value: null })}><Plus size={14} aria-hidden="true" /> Person</Button>
+            <Button variant="primary" onClick={() => setEditing({ kind: "team", value: null })}><Plus size={14} aria-hidden="true" /> Team</Button>
+          </>
+        )}
       />
 
       {clock?.demoMode && (
@@ -80,9 +114,18 @@ export function TeamsPage({ onClockChange }: { onClockChange: () => void }) {
           const current = oc.get(t.id);
           return (
             <Card key={t.id} className="p-4">
-              <div className="flex items-baseline gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <h2 className="font-semibold">{t.name || t.id}</h2>
                 <code className="font-mono text-xs text-gray-500">{t.id}</code>
+                <OriginBadge origin={t.origin} />
+                {editable && (
+                  <span className="ml-auto flex gap-1">
+                    {t.origin && t.origin !== "file" && (
+                      <Button onClick={() => void revert("team", t.id, t.origin)}><Undo2 size={13} aria-hidden="true" /> {t.origin === "api" ? "Delete" : "Revert"}</Button>
+                    )}
+                    <Button onClick={() => setEditing({ kind: "team", value: t })}><Pencil size={13} aria-hidden="true" /> Edit</Button>
+                  </span>
+                )}
               </div>
               {current && (
                 <div className="mt-2 rounded-md bg-emerald-50 p-2.5 text-sm ring-1 ring-emerald-200 dark:bg-emerald-500/10 dark:ring-emerald-500/30">
@@ -102,6 +145,18 @@ export function TeamsPage({ onClockChange }: { onClockChange: () => void }) {
                         <span className="font-medium">{p.name}</span>
                         <span className="text-xs text-gray-500">{p.timezone}</span>
                         <span className="text-xs text-gray-500">· local {localTime(now, p.timezone)}</span>
+                        <OriginBadge origin={p.origin} />
+                        {editable && (
+                          <span className="ml-auto flex gap-1">
+                            {p.origin && p.origin !== "file" && p.origin !== "api" && (
+                              <button type="button" className="console-muted text-xs hover:underline" onClick={() => void revert("person", p.id, p.origin)}>Revert</button>
+                            )}
+                            <button type="button" className="inline-flex items-center gap-1 text-xs font-medium text-[var(--console-accent)] hover:underline"
+                              onClick={() => setEditing({ kind: "person", value: p })}>
+                              <Pencil size={12} aria-hidden="true" /> Edit
+                            </button>
+                          </span>
+                        )}
                       </div>
                       <Prefs prefs={p.preferences} fallback={t.preferences?.length ? "team" : "default"} />
                     </li>
@@ -118,6 +173,13 @@ export function TeamsPage({ onClockChange }: { onClockChange: () => void }) {
           );
         })}
       </div>
+
+      {editing?.kind === "person" && (
+        <PersonSheet person={editing.value} defaults={defaults} onClose={() => setEditing(null)} onSaved={saved} />
+      )}
+      {editing?.kind === "team" && (
+        <TeamSheet team={editing.value} people={[...people.values()]} defaults={defaults} onClose={() => setEditing(null)} onSaved={saved} />
+      )}
 
       {defaults.length > 0 && (
         <div className="mt-4">
@@ -195,5 +257,14 @@ function Schedule({ team, people }: { team: Team; people: Map<string, Person> })
         </div>
       ))}
     </div>
+  );
+}
+
+function OriginBadge({ origin }: { origin?: Origin }) {
+  if (!origin || origin === "file") return null;
+  return (
+    <Badge className="bg-amber-50 text-amber-800 ring-amber-600/20 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-400/30">
+      {origin === "api" ? "created in UI" : "edited in UI"}
+    </Badge>
   );
 }

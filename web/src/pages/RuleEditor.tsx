@@ -1,8 +1,10 @@
-import { ArrowLeft, FlaskConical } from "lucide-react";
+import { ArrowLeft, FlaskConical, History } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, ApiError, type Info, type RuleDetail, type Team, type TestResult } from "../api";
+import { isMap, parseDocument, visit } from "yaml";
+import { api, ApiError, type BacktestResult, type Info, type RuleDetail, type Team, type TestResult } from "../api";
+import { builderSupports, ConditionBuilder, toRootGroup, type Cond } from "../ConditionBuilder";
 import { navigate, Link } from "../router";
-import { Badge, Button, Card, Notice, PageHeader, formatUSD, toneFor } from "../ui";
+import { Badge, Button, Card, Notice, PageHeader, Select, formatUSD, timeAgo, toneFor } from "../ui";
 import { OriginBadge } from "./RulesPage";
 
 export const DRAFT_KEY = "kardan.ruleDraft";
@@ -28,6 +30,25 @@ presentation:
 
 const editorClass =
   "block w-full resize-y rounded-md border-0 bg-gray-950 p-3 font-mono text-[13px] leading-5 text-gray-100 ring-1 ring-gray-800 focus:ring-2 focus:ring-[var(--console-accent)]";
+
+/** Reads `match:` from rule YAML for the builder, or explains why it cannot. */
+function readMatch(yaml: string): { match?: Cond; problem?: string } {
+  const doc = parseDocument(yaml);
+  if (doc.errors.length) return { problem: "Fix the YAML first: " + doc.errors[0].message.split("\n")[0] };
+  const js = doc.toJS() as { match?: unknown; rules?: unknown } | null;
+  if (js && js.rules) return { problem: "This file holds several rules; edit them in YAML." };
+  if (!builderSupports(js?.match)) return { problem: "This rule uses expressions the builder cannot show; edit it in YAML." };
+  return { match: toRootGroup(js?.match as Cond | undefined) };
+}
+
+/** Writes `match:` back, keeping the rest of the YAML (and its comments) as written. */
+function writeMatch(yaml: string, match: Cond): string {
+  const doc = parseDocument(yaml);
+  const node = doc.createNode(match);
+  visit(node, { Map(_, n) { if (isMap(n) && n.has("field")) n.flow = true; } });
+  doc.set("match", node);
+  return doc.toString({ lineWidth: 0 });
+}
 
 const exampleEvent = JSON.stringify({
   type: "WORKFLOW_FAILED",
@@ -55,6 +76,11 @@ export function RuleEditor({ id, teams }: { id: string | null; teams: Team[] }) 
     created ? { tone: "info", text: `Rule created (version ${created.detail.version}).` } : null,
   );
   const [info, setInfo] = useState<Info | null>(null);
+  const [view, setView] = useState<"builder" | "yaml">("builder");
+  const [schemaFields, setSchemaFields] = useState<string[]>([]);
+  const [backtest, setBacktest] = useState<BacktestResult | null>(null);
+  const [backtesting, setBacktesting] = useState(false);
+  const [hours, setHours] = useState(1);
   const [loaded, setLoaded] = useState(!!created);
   const initialYaml = useRef(created?.detail.yaml ?? "");
   const initialisedDraft = useRef(false);
@@ -63,6 +89,11 @@ export function RuleEditor({ id, teams }: { id: string | null; teams: Team[] }) 
 
   useEffect(() => {
     api.info().then(setInfo).catch(() => {});
+    api.schemas().then((list) => {
+      const paths = new Set<string>();
+      for (const sc of list) for (const f of sc.fields ?? []) paths.add(f.path);
+      setSchemaFields([...paths].sort());
+    }).catch(() => {});
   }, []);
 
   // Load the rule (or a draft handed over from the schema page).
@@ -137,6 +168,27 @@ export function RuleEditor({ id, teams }: { id: string | null; teams: Team[] }) 
       window.clearTimeout(timer);
     };
   }, [yaml, sample, loaded]);
+
+  // Replay recorded events through the draft once it is valid.
+  const validNow = !!test?.valid;
+  useEffect(() => {
+    if (!loaded || !validNow) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      setBacktesting(true);
+      api.backtestRule(yaml, hours)
+        .then((r) => { if (!cancelled) setBacktest(r); })
+        .catch((e: Error) => { if (!cancelled) setBacktest({ valid: false, error: e.message }); })
+        .finally(() => { if (!cancelled) setBacktesting(false); });
+    }, 900);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [yaml, hours, loaded, validNow]);
+
+  const parsedMatch = useMemo(() => readMatch(yaml), [yaml]);
+  const fieldSuggestions = useMemo(
+    () => [...(info?.facets ?? []).filter((f) => !["$id", "$raw", "$receivedAt"].includes(f)), ...schemaFields],
+    [info, schemaFields],
+  );
 
   const updateSample = (value: string) => {
     sampleEdited.current = true;
@@ -226,10 +278,29 @@ export function RuleEditor({ id, teams }: { id: string | null; teams: Team[] }) 
 
       <div className="grid items-start gap-4 xl:grid-cols-2">
         <section className="console-panel min-w-0 space-y-3 p-4 sm:p-5">
-          <label htmlFor="rule-yaml" className="block font-semibold">Rule definition</label>
-          <p className="console-muted text-sm">Set what the rule matches, who gets notified, and what the alert says.</p>
-          <textarea id="rule-yaml" value={yaml} onChange={(e) => setYaml(e.target.value)}
-            spellCheck={false} rows={22} className={editorClass} disabled={!loaded} />
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="font-semibold">Rule definition</h2>
+            <div className="flex gap-1" role="group" aria-label="Editor view">
+              <button type="button" className="console-toggle" aria-pressed={view === "builder"} onClick={() => setView("builder")}>Builder</button>
+              <button type="button" className="console-toggle" aria-pressed={view === "yaml"} onClick={() => setView("yaml")}>YAML</button>
+            </div>
+          </div>
+          <p className="console-muted text-sm">
+            {view === "builder"
+              ? "Choose which events match. Routing, wording and timing live in the YAML view; both stay in sync."
+              : "Set what the rule matches, who gets notified, and what the alert says."}
+          </p>
+          {view === "builder" ? (
+            parsedMatch.match ? (
+              <ConditionBuilder value={parsedMatch.match} fields={fieldSuggestions} ops={info?.ops ?? ["eq"]} disabled={!loaded}
+                onChange={(m) => setYaml((y) => writeMatch(y, m))} />
+            ) : (
+              <Notice tone="warn">{parsedMatch.problem}</Notice>
+            )
+          ) : (
+            <textarea id="rule-yaml" aria-label="Rule YAML" value={yaml} onChange={(e) => setYaml(e.target.value)}
+              spellCheck={false} rows={22} className={editorClass} disabled={!loaded} />
+          )}
           <Reference info={info} />
         </section>
         <section className="console-panel min-w-0 space-y-3 p-4 sm:p-5">
@@ -245,6 +316,22 @@ export function RuleEditor({ id, teams }: { id: string | null; teams: Team[] }) 
             className={editorClass} />
           <div aria-live="polite" aria-busy={testing}>
             <TestPanel test={test} testing={testing} hasSample={sample.trim() !== ""} fieldRows={fieldRows} />
+          </div>
+          <div className="border-t border-[var(--console-line)] pt-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="flex items-center gap-2 font-semibold">
+                <History size={17} className="text-[var(--console-accent)]" aria-hidden="true" /> Backtest on recorded events
+              </h2>
+              <Select aria-label="Backtest period" value={String(hours)} onChange={(e) => setHours(Number(e.target.value))} className="w-36">
+                <option value="1">Last hour</option>
+                <option value="6">Last 6 hours</option>
+                <option value="24">Last 24 hours</option>
+              </Select>
+            </div>
+            <p className="console-muted mt-1 text-sm">Replays events from the durable log through this draft. Nothing is stored or sent.</p>
+            <div aria-live="polite" aria-busy={backtesting} className="mt-3">
+              <BacktestPanel result={backtest} running={backtesting} valid={validNow} />
+            </div>
           </div>
         </section>
       </div>
@@ -404,5 +491,59 @@ function Reference({ info }: { info: Info | null }) {
         </p>
       </div>
     </details>
+  );
+}
+
+function BacktestPanel({ result, running, valid }: { result: BacktestResult | null; running: boolean; valid: boolean }) {
+  if (!valid) return <p className="console-muted text-sm">Runs once the rule is valid.</p>;
+  if (!result) return <p className="console-muted text-sm">{running ? "Replaying events…" : "Waiting for changes…"}</p>;
+  if (!result.valid || result.error) return <Notice tone="error">{result.error ?? "Backtest failed"}</Notice>;
+  const buckets = result.buckets ?? [];
+  const peak = Math.max(1, ...buckets.map((b) => b.matched));
+  const now = Date.now();
+  return (
+    <div className={running ? "opacity-60 transition-opacity" : ""}>
+      <dl className="grid grid-cols-3 gap-2">
+        <Figure label="Events matched" value={result.matched ?? 0} accent />
+        <Figure label={result.kind === "aggregate" ? "Threshold crossings" : "Alerts it would open"} value={result.alerts ?? 0} />
+        <Figure label="Events replayed" value={result.scanned ?? 0} />
+      </dl>
+      {buckets.length > 0 && (
+        <div className="mt-3" aria-label="Matches over time">
+          <div className="backtest-bars" role="img"
+            aria-label={`Matched events per ${Math.round((Date.parse(buckets[1]?.at ?? "") - Date.parse(buckets[0].at)) / 60000) || 0} minutes`}>
+            {buckets.map((b) => (
+              <span key={b.at} style={{ height: `${Math.max(b.matched ? 8 : 2, (b.matched / peak) * 100)}%` }}
+                data-empty={b.matched === 0} title={`${new Date(b.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}: ${b.matched}`} />
+            ))}
+          </div>
+          <div className="console-muted mt-1 flex justify-between text-xs">
+            <span>{timeAgo(buckets[0].at, now)}</span><span>now</span>
+          </div>
+        </div>
+      )}
+      {result.note && <p className="console-muted mt-2 text-xs">{result.note}</p>}
+      {result.truncated && <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">Stopped early (event or time budget); numbers are a lower bound.</p>}
+      {(result.recoveries ?? 0) > 0 && <p className="console-muted mt-1 text-xs">{result.recoveries} recovery events would have closed alerts.</p>}
+      {(result.samples ?? []).length > 0 && (
+        <ul className="mt-3 divide-y divide-[var(--console-line)] text-sm">
+          {result.samples!.map((m) => (
+            <li key={m.id} className="flex items-baseline justify-between gap-3 py-1.5">
+              <span className="min-w-0 truncate" title={m.title}>{m.title || "(no title)"}</span>
+              <span className="console-muted shrink-0 font-mono text-xs">{m.sourceId} · {timeAgo(m.receivedAt, now)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+function Figure({ label, value, accent }: { label: string; value: number; accent?: boolean }) {
+  return (
+    <div className="rounded-md border border-[var(--console-line)] bg-[var(--console-control)] px-2.5 py-2">
+      <dt className="console-muted text-xs">{label}</dt>
+      <dd className={`mt-0.5 font-mono text-xl font-semibold tabular-nums ${accent ? "text-[var(--console-accent)]" : ""}`}>{value.toLocaleString()}</dd>
+    </div>
   );
 }

@@ -121,14 +121,18 @@ export interface Incident {
 
 export interface Team {
   id: string;
+  origin?: Origin;
   name: string;
   members: string[];
   preferences?: Preference[];
   onCall?: OnCallConfig;
 }
 
+export type Origin = "file" | "api" | "override";
+
 export interface Person {
   id: string;
+  origin?: Origin;
   name: string;
   email?: string;
   phone?: string;
@@ -395,6 +399,39 @@ export function alertKind(a: Alert): "event" | "aggregate" | "absence" {
   return "event";
 }
 
+export interface BacktestResult {
+  valid: boolean;
+  error?: string;
+  kind?: string;
+  scanned?: number;
+  matched?: number;
+  alerts?: number;
+  recoveries?: number;
+  from?: string;
+  to?: string;
+  truncated?: boolean;
+  buckets?: { at: string; matched: number }[];
+  samples?: { id: string; receivedAt: string; sourceId: string; title: string; severity: string }[];
+  bySource?: Record<string, number>;
+  note?: string;
+}
+
+export interface Inspection {
+  format: string;
+  signature: string;
+  payload: unknown;
+  fields: FieldInfo[];
+  facets: Record<string, unknown>;
+}
+
+export interface DirectoryEntry {
+  kind: "person" | "team";
+  id: string;
+  version: number;
+  updatedBy: string;
+  updatedAt: string;
+}
+
 export interface FieldInfo {
   path: string;
   type: string;
@@ -505,7 +542,20 @@ export const api = {
   alert: (id: string) => request<{ alert: Alert; notifications: Notification[] }>("GET", `/api/alerts/${id}`),
   ack: (id: string, by: string) => request<Alert>("POST", `/api/alerts/${id}/ack`, { by }),
   resolve: (id: string, by: string) => request<Alert>("POST", `/api/alerts/${id}/resolve`, { by }),
-  teams: () => request<{ teams: Team[]; people: Person[]; defaultPreferences: Preference[] | null }>("GET", "/api/teams"),
+  teams: () => request<{ teams: Team[]; people: Person[]; defaultPreferences: Preference[] | null; editable?: boolean }>("GET", "/api/teams"),
+  saveTeam: (t: Team) => request<DirectoryEntry>("PUT", `/api/teams/${encodeURIComponent(t.id)}`, t),
+  revertTeam: (id: string) => request<void>("DELETE", `/api/teams/${encodeURIComponent(id)}`),
+  savePerson: (p: Person) => request<DirectoryEntry>("PUT", `/api/people/${encodeURIComponent(p.id)}`, p),
+  revertPerson: (id: string) => request<void>("DELETE", `/api/people/${encodeURIComponent(id)}`),
+  backtestRule: (ruleYaml: string, hours: number) => request<BacktestResult>("POST", "/api/rules/backtest", { ruleYaml, hours }),
+  inspectEvent: (raw: string) => request<Inspection>("POST", "/api/events/inspect", { raw }),
+  /** Sends a raw event through HTTP ingest, exactly as a webhook would. */
+  sendEvent: async (source: string, raw: string) => {
+    const res = await fetch(`/ingest/${encodeURIComponent(source)}`, { method: "POST", headers: { "Content-Type": raw.trim().startsWith("{") ? "application/json" : "text/plain" }, body: raw });
+    if (!res.ok) throw new ApiError((await res.text()) || res.statusText, res.status);
+    return (await res.json()) as { accepted: number; ids: string[] };
+  },
+  incident: (id: string) => request<{ incident: Incident; alerts: Alert[] }>("GET", `/api/incidents/${encodeURIComponent(id)}`),
   onCall: () => request<{ now: string; onCall: OnCallNow[] }>("GET", "/api/oncall"),
   clock: () => request<ClockState>("GET", "/api/clock"),
   setClock: (offsetMinutes: number) => request<ClockState>("PUT", "/api/clock", { offsetMinutes }),

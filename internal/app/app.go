@@ -29,6 +29,7 @@ import (
 	"github.com/undeluro/kardan-alerts/internal/platform/kafka"
 	"github.com/undeluro/kardan-alerts/internal/platform/pg"
 	"github.com/undeluro/kardan-alerts/internal/processor"
+	"github.com/undeluro/kardan-alerts/internal/replay"
 	"github.com/undeluro/kardan-alerts/internal/rules"
 	"github.com/undeluro/kardan-alerts/internal/runbooks"
 	"github.com/undeluro/kardan-alerts/internal/runner"
@@ -96,7 +97,7 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	reloader := &Reloader{
 		ConfigDir: cfg.ConfigDir, Window: cfg.DedupWindow, Engine: engine, RuleStore: ruleStore,
 		Schemas: schemas, Sources: sources, Redis: rdb, Log: log.With("component", "config"),
-		Runbooks: rbHolder, RunbookStore: rbStore,
+		Runbooks: rbHolder, RunbookStore: rbStore, DirStore: &directory.Store{Pool: pool},
 	}
 	if err := reloader.LoadAll(ctx); err != nil {
 		return err
@@ -194,8 +195,12 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 			Calendars: reloader.Calendars, CheckRule: reloader.checkCalendars,
 			Runner: run, Runbooks: rbHolder, RunbookStore: rbStore, Actions: reloader.Actions, Audit: auditLog,
 			ApprovalSecret: cfg.ApprovalSecret,
-			ChannelStates:  func(r *http.Request) map[string]string { return channelStates(r.Context(), rdb) },
-			Notify:         func(ctx context.Context, kind string) error { return bus.NotifyConfig(ctx, rdb, kind) },
+			DirStore:       reloader.DirStore, DirectoryOrigins: reloader.DirectoryOrigins,
+			CheckDirectory:  reloader.CheckDirectory,
+			ReloadDirectory: func(ctx context.Context) { _ = reloader.rebuildDirectory(ctx, false) },
+			Replay:          &replay.Replayer{Brokers: cfg.KafkaBrokers, Topic: cfg.EventsTopic},
+			ChannelStates:   func(r *http.Request) map[string]string { return channelStates(r.Context(), rdb) },
+			Notify:          func(ctx context.Context, kind string) error { return bus.NotifyConfig(ctx, rdb, kind) },
 			ParseRaw: func(source string, raw []byte) *event.Envelope {
 				if sources != nil {
 					return ingest.NewEnvelope(sources.ParserFor(source), source, raw, nil)

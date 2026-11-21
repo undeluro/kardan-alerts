@@ -168,7 +168,8 @@ export function AlertsPage({
                   <span>
                     Showing incident <b>{selected ? `${incidentLabel(selected.keyField)} ${selected.keyValue}` : incident}</b>
                   </span>
-                  <button type="button" onClick={() => setIncident("")} className="ml-auto inline-flex items-center gap-1 font-medium hover:underline">
+                  <Link to={`/incidents/${encodeURIComponent(incident)}`} className="ml-auto font-medium hover:underline">Incident details</Link>
+                  <button type="button" onClick={() => setIncident("")} className="inline-flex items-center gap-1 font-medium hover:underline">
                     Show all <X size={14} aria-hidden="true" />
                   </button>
                 </div>

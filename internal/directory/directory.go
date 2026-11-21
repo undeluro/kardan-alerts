@@ -45,6 +45,14 @@ type Directory struct {
 
 // Load reads teams.yaml. A missing file yields an empty directory.
 func Load(path string) (*Directory, error) {
+	d, err := readFile(path)
+	if err != nil {
+		return nil, err
+	}
+	return d, d.index()
+}
+
+func readFile(path string) (*Directory, error) {
 	d := &Directory{}
 	data, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
@@ -55,7 +63,7 @@ func Load(path string) (*Directory, error) {
 			return nil, fmt.Errorf("%s: %w", path, err)
 		}
 	}
-	return d, d.index()
+	return d, nil
 }
 
 func (d *Directory) index() error {

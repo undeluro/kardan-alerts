@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -42,10 +44,12 @@ type Reloader struct {
 	Sources      *ingest.Manager // nil unless this replica runs the ingest role
 	Runbooks     *runbooks.Holder
 	RunbookStore *runbooks.Store
+	DirStore     *directory.Store // people/teams edited in the UI
 	Redis        *redis.Client
 	Log          *slog.Logger
 
 	dir     atomic.Pointer[directory.Directory]
+	origins atomic.Pointer[directory.Origins]
 	privacy atomic.Pointer[privacy.Policy]
 	fx      atomic.Pointer[finance.FX]
 	corr    atomic.Pointer[finance.Correlation]
@@ -58,10 +62,83 @@ type Reloader struct {
 	errors    map[string]string // config file -> problem, shown in the UI
 	dbVersion string
 	rbVersion string
+	dirVer    string
 	filesHash string
 }
 
-func (r *Reloader) Directory() *directory.Directory   { return r.dir.Load() }
+func (r *Reloader) Directory() *directory.Directory { return r.dir.Load() }
+
+// DirectoryOrigins says where each person and team comes from (file, api, override).
+func (r *Reloader) DirectoryOrigins() directory.Origins {
+	if o := r.origins.Load(); o != nil {
+		return *o
+	}
+	return directory.Origins{}
+}
+
+// rebuildDirectory merges teams.yaml with stored entries. At startup a broken
+// teams.yaml is fatal; later it keeps the last good version.
+func (r *Reloader) rebuildDirectory(ctx context.Context, startup bool) error {
+	var entries []directory.Entry
+	if r.DirStore != nil {
+		var err error
+		if entries, err = r.DirStore.List(ctx); err != nil {
+			r.Log.Error("load stored people and teams", "err", err)
+		}
+		v, _ := r.DirStore.Version(ctx)
+		r.mu.Lock()
+		r.dirVer = v
+		r.mu.Unlock()
+	}
+	d, origins, problems, err := directory.LoadMerged(filepath.Join(r.ConfigDir, "teams.yaml"), entries)
+	r.noteErr("teams.yaml", err)
+	if err != nil {
+		if startup {
+			return fmt.Errorf("load teams: %w", err)
+		}
+		return nil
+	}
+	r.dir.Store(d)
+	r.origins.Store(&origins)
+	r.mu.Lock()
+	if len(problems) > 0 {
+		r.errors["directory (UI edits)"] = strings.Join(problems, "; ")
+	} else {
+		delete(r.errors, "directory (UI edits)")
+	}
+	r.mu.Unlock()
+	return nil
+}
+
+// CheckDirectory validates a candidate edit against the current file and
+// stored entries before it is saved.
+func (r *Reloader) CheckDirectory(ctx context.Context, e directory.Entry) error {
+	var entries []directory.Entry
+	if r.DirStore != nil {
+		var err error
+		if entries, err = r.DirStore.List(ctx); err != nil {
+			return err
+		}
+	}
+	kept := entries[:0:0]
+	for _, x := range entries {
+		if x.Kind != e.Kind || x.ID != e.ID {
+			kept = append(kept, x)
+		}
+	}
+	kept = append(kept, e)
+	_, _, problems, err := directory.LoadMerged(filepath.Join(r.ConfigDir, "teams.yaml"), kept)
+	if err != nil {
+		return err
+	}
+	for _, p := range problems {
+		if strings.Contains(p, " "+e.Kind+" "+e.ID+" ") {
+			_, msg, _ := strings.Cut(p, "skipped: ")
+			return errors.New(msg)
+		}
+	}
+	return nil
+}
 func (r *Reloader) Privacy() *privacy.Policy          { return r.privacy.Load() }
 func (r *Reloader) FX() *finance.FX                   { return r.fx.Load() }
 func (r *Reloader) Correlation() *finance.Correlation { return r.corr.Load() }
@@ -189,11 +266,9 @@ func (r *Reloader) rebuildRunbooks(ctx context.Context) {
 // later it only logs and keeps the last good version.
 func (r *Reloader) LoadAll(ctx context.Context) error {
 	r.errors = map[string]string{}
-	d, err := directory.Load(filepath.Join(r.ConfigDir, "teams.yaml"))
-	if err != nil {
-		return fmt.Errorf("load teams: %w", err)
+	if err := r.rebuildDirectory(ctx, true); err != nil {
+		return err
 	}
-	r.dir.Store(d)
 	pol, err := privacy.Load(filepath.Join(r.ConfigDir, "classification.yaml"))
 	if err != nil {
 		return fmt.Errorf("load classification: %w", err)
@@ -268,17 +343,7 @@ func (r *Reloader) applySources(ctx context.Context) {
 
 func (r *Reloader) reloadFiles(ctx context.Context) {
 	r.Log.Info("config directory changed, reloading")
-	if d, err := directory.Load(filepath.Join(r.ConfigDir, "teams.yaml")); err != nil {
-		r.Log.Error("teams.yaml invalid, keeping previous version", "err", err)
-		r.mu.Lock()
-		r.errors["teams.yaml"] = err.Error()
-		r.mu.Unlock()
-	} else {
-		r.dir.Store(d)
-		r.mu.Lock()
-		delete(r.errors, "teams.yaml")
-		r.mu.Unlock()
-	}
+	_ = r.rebuildDirectory(ctx, false)
 	if pol, err := privacy.Load(filepath.Join(r.ConfigDir, "classification.yaml")); err != nil {
 		r.Log.Error("classification.yaml invalid, keeping previous version", "err", err)
 		r.mu.Lock()
@@ -323,6 +388,8 @@ func (r *Reloader) Run(ctx context.Context) error {
 				}
 			case "runbooks":
 				r.rebuildRunbooks(ctx)
+			case "directory":
+				_ = r.rebuildDirectory(ctx, false)
 			}
 		case <-filesTick.C:
 			h, err := hashDir(r.ConfigDir)
@@ -340,6 +407,15 @@ func (r *Reloader) Run(ctx context.Context) error {
 				_ = r.rebuildRules(ctx)
 			}
 			_ = r.Schemas.ReloadManual(ctx)
+			if r.DirStore != nil {
+				v, err := r.DirStore.Version(ctx)
+				r.mu.Lock()
+				changed := err == nil && v != r.dirVer
+				r.mu.Unlock()
+				if changed {
+					_ = r.rebuildDirectory(ctx, false)
+				}
+			}
 			if r.RunbookStore != nil {
 				v, err := r.RunbookStore.Version(ctx)
 				r.mu.Lock()

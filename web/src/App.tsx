@@ -8,6 +8,8 @@ import { MarketsPage } from "./pages/MarketsPage";
 import { RunbooksPage } from "./pages/RunbooksPage";
 import { RunbookEditor } from "./pages/RunbookEditor";
 import { AuditPage } from "./pages/AuditPage";
+import { IncidentPage } from "./pages/IncidentPage";
+import { OnboardingPage } from "./pages/OnboardingPage";
 import { setBusinessClock } from "./clock";
 import { RuleEditor } from "./pages/RuleEditor";
 import { RulesPage } from "./pages/RulesPage";
@@ -36,14 +38,14 @@ const store = {
 };
 
 const NAV = [
-  { to: "/", label: "Alerts", icon: BellRing, match: (p: string) => p === "/" || p.startsWith("/alerts") },
+  { to: "/", label: "Alerts", icon: BellRing, match: (p: string) => p === "/" || p.startsWith("/alerts") || p.startsWith("/incidents") },
   { to: "/rules", label: "Rules", icon: SlidersHorizontal, match: (p: string) => p.startsWith("/rules") },
   { to: "/schemas", label: "Schemas", icon: Database, match: (p: string) => p.startsWith("/schemas") },
   { to: "/sources", label: "Sources", icon: Cable, match: (p: string) => p.startsWith("/sources") },
   { to: "/runbooks", label: "Runbooks", icon: BookOpenCheck, match: (p: string) => p.startsWith("/runbooks") },
   { to: "/markets", label: "Markets", icon: CalendarClock, match: (p: string) => p.startsWith("/markets") },
   { to: "/deliveries", label: "Deliveries", icon: Send, match: (p: string) => p.startsWith("/deliveries") },
-  { to: "/teams", label: "Teams", icon: Users, match: (p: string) => p.startsWith("/teams") },
+  { to: "/teams", label: "Teams", icon: Users, match: (p: string) => p.startsWith("/teams") || p.startsWith("/onboarding") },
   { to: "/audit", label: "Audit", icon: ScrollText, match: (p: string) => p.startsWith("/audit") },
 ];
 
@@ -116,6 +118,7 @@ export default function App() {
   const ruleMatch = path.match(/^\/rules\/(.+)$/);
   const schemaMatch = path.match(/^\/schemas\/([0-9a-f]+)$/);
   const runbookMatch = path.match(/^\/runbooks\/(.+)$/);
+  const incidentMatch = path.match(/^\/incidents\/(.+)$/);
 
   let page;
   if (path === "/rules") page = <RulesPage />;
@@ -125,12 +128,14 @@ export default function App() {
   else if (schemaMatch) page = <SchemaDetail id={schemaMatch[1]} teams={teams} now={now} />;
   else if (path === "/sources") page = <SourcesPage now={now} />;
   else if (path === "/deliveries") page = <DeliveriesPage now={now} onToast={showToast} />;
-  else if (path === "/teams") page = <TeamsPage onClockChange={loadClock} />;
+  else if (path === "/teams") page = <TeamsPage onClockChange={loadClock} onToast={showToast} />;
   else if (path === "/markets") page = <MarketsPage />;
   else if (path === "/runbooks") page = <RunbooksPage />;
   else if (path === "/runbooks/new") page = <RunbookEditor key="new" id={null} teams={teams} />;
   else if (runbookMatch) page = <RunbookEditor key={runbookMatch[1]} id={decodeURIComponent(runbookMatch[1])} teams={teams} />;
   else if (path === "/audit") page = <AuditPage />;
+  else if (path === "/onboarding") page = <OnboardingPage onToast={showToast} />;
+  else if (incidentMatch) page = <IncidentPage id={decodeURIComponent(incidentMatch[1])} now={now} />;
   else if (path !== "/" && !alertId)
     page = (
       <div className="py-16 text-center">

@@ -352,6 +352,21 @@ kardan-alerts/
   details are stored as text so the hashed bytes are exact. Verify walks the chain and reports the first entry
   that was changed or is missing. Reports leave out the raw event (it holds unmasked data).
 
+## Implementation notes (M8)
+
+- **Backtest replays the durable log:** `POST /api/rules/backtest` reads the events topic from the offsets at
+  "now − N hours" with a throwaway, group-less consumer (committed offsets untouched), runs the draft through
+  the same doc/facet pipeline, and reports matched events, distinct fingerprints (alerts it would open) or,
+  for aggregate rules, simulated threshold crossings. Budget: 200k events / 8 s, flagged when truncated.
+- **People and teams editable without losing teams.yaml:** `directory_entries` rows override or extend the
+  file the same way stored rules do. Entries are applied one by one and a bad one is skipped and reported, so
+  one broken edit cannot take routing down; saves are validated against the merged result first.
+- **Builder and YAML stay one source of truth:** the condition builder edits only `match:` through the
+  `yaml` Document API, so comments and the rest of the rule survive; rules with `expr` or multi-rule files
+  stay YAML-only.
+- **Onboarding wizard** uses `POST /api/events/inspect` (parse + flatten + facets, nothing stored), then saves
+  people, the team and the rule, and can send the sample through `/ingest/<team>-onboarding`.
+
 ## Milestones
 
 1. **Skeleton** — go.mod, compose (redpanda, postgres, redis, mailpit), role switch, migrations, React scaffold

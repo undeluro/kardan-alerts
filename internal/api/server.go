@@ -22,6 +22,7 @@ import (
 	"github.com/undeluro/kardan-alerts/internal/finance"
 	"github.com/undeluro/kardan-alerts/internal/ingest"
 	"github.com/undeluro/kardan-alerts/internal/platform/clock"
+	"github.com/undeluro/kardan-alerts/internal/replay"
 	"github.com/undeluro/kardan-alerts/internal/rules"
 	"github.com/undeluro/kardan-alerts/internal/runbooks"
 	"github.com/undeluro/kardan-alerts/internal/runner"
@@ -54,9 +55,15 @@ type Server struct {
 	Audit          *audit.Log
 	ApprovalSecret string
 	Hub            *Hub
-	UI             fs.FS // built React app; nil when not embedded
-	Log            *slog.Logger
-	Info           map[string]any
+	// People and teams edited in the UI (nil: read-only, teams.yaml only).
+	DirStore         *directory.Store
+	DirectoryOrigins func() directory.Origins
+	CheckDirectory   func(context.Context, directory.Entry) error
+	ReloadDirectory  func(context.Context)
+	Replay           *replay.Replayer // reads past events for rule backtests
+	UI               fs.FS            // built React app; nil when not embedded
+	Log              *slog.Logger
+	Info             map[string]any
 }
 
 func (s *Server) Register(mux *http.ServeMux) {
@@ -70,6 +77,8 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/rules", s.listRules)
 	mux.HandleFunc("POST /api/rules", s.createRule)
 	mux.HandleFunc("POST /api/rules/test", s.testRule)
+	mux.HandleFunc("POST /api/rules/backtest", s.backtestRule)
+	mux.HandleFunc("POST /api/events/inspect", s.inspectEvent)
 	mux.HandleFunc("GET /api/rules/{id}", s.getRule)
 	mux.HandleFunc("PUT /api/rules/{id}", s.updateRule)
 	mux.HandleFunc("DELETE /api/rules/{id}", s.deleteRule)
@@ -82,6 +91,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/fx", s.getFX)
 	mux.HandleFunc("GET /api/calendars", s.getCalendars)
 	s.registerRunbooks(mux)
+	s.registerDirectory(mux)
 	mux.HandleFunc("GET /api/deliveries", s.listDeliveries)
 	mux.HandleFunc("POST /api/notifications/{id}/resend", s.resend)
 	mux.HandleFunc("GET /api/channels", s.channels)
@@ -184,11 +194,6 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, st)
-}
-
-func (s *Server) teams(w http.ResponseWriter, _ *http.Request) {
-	d := s.Directory()
-	writeJSON(w, http.StatusOK, map[string]any{"teams": d.Teams, "people": d.People, "defaultPreferences": d.Defaults})
 }
 
 type ruleView struct {
