@@ -37,6 +37,7 @@ type Message struct {
 	Status    string    `json:"status,omitempty"` // calls: ringing | acknowledged | declined
 	At        time.Time `json:"at"`
 	LatencyMs float64   `json:"latencyMs,omitempty"`
+	Purpose   string    `json:"purpose,omitempty"` // alert | resolved | digest | approval | escalation
 }
 
 // Faults simulate a misbehaving provider.
@@ -63,7 +64,7 @@ type Server struct {
 	seen     map[string]bool
 	faults   Faults
 	subs     map[chan []byte]struct{}
-	lat      []float64
+	lat      []latSample
 	received int64
 	rejected int64
 	since    time.Time
@@ -75,6 +76,17 @@ const (
 	maxMessages = 3000
 	maxLatency  = 500_000
 )
+
+// latSample is one delivery: when the event entered Kardan and how long it
+// took to reach the provider. Keeping the event time lets load tests report
+// percentiles per phase (steady, burst, recovery).
+type latSample struct {
+	EventAt time.Time
+	Ms      float64
+	To      string
+	Kind    string // sms | call
+	Purpose string // alert | resolved | digest | approval | escalation
+}
 
 func New(kardanURL, token string, log *slog.Logger) *Server {
 	return &Server{KardanURL: strings.TrimRight(kardanURL, "/"), Token: token, Log: log,
@@ -123,6 +135,7 @@ type sendRequest struct {
 	AlertID         string    `json:"alertId"`
 	ShortCode       string    `json:"shortCode"`
 	EventReceivedAt time.Time `json:"eventReceivedAt"`
+	Kind            string    `json:"kind"` // what the notification is for: alert, resolved, digest...
 }
 
 // accept is the provider API: POST /sms or /call.
@@ -167,7 +180,7 @@ func (s *Server) accept(kind string) http.HandlerFunc {
 			return
 		}
 		m := Message{Kind: kind, Direction: "out", Phone: req.To, Text: req.Text, Ref: req.ID, AlertID: req.AlertID,
-			ShortCode: req.ShortCode, At: time.Now()}
+			ShortCode: req.ShortCode, At: time.Now(), Purpose: req.Kind}
 		if kind == "call" {
 			m.Status = "ringing"
 		}
@@ -191,7 +204,7 @@ func (s *Server) add(m Message) Message {
 	if m.Direction == "out" && m.Kind != "reply" && m.Kind != "system" {
 		s.received++
 		if m.LatencyMs > 0 {
-			s.lat = append(s.lat, m.LatencyMs)
+			s.lat = append(s.lat, latSample{EventAt: m.At.Add(-time.Duration(m.LatencyMs * float64(time.Millisecond))), Ms: m.LatencyMs, To: m.Phone, Kind: m.Kind, Purpose: m.Purpose})
 			if len(s.lat) > maxLatency {
 				s.lat = s.lat[len(s.lat)-maxLatency:]
 			}
@@ -415,11 +428,32 @@ func (s *Server) people(w http.ResponseWriter, r *http.Request) {
 
 // stats reports latency from Kardan accepting the event to this gateway
 // receiving the message: an end-to-end figure measured outside Kardan.
-func (s *Server) stats(w http.ResponseWriter, _ *http.Request) {
+// stats reports delivery counts and latency percentiles. ?from=&to= (RFC 3339)
+// limit the percentiles to events that entered Kardan in that window, and
+// ?phone= to one destination (load tests use a number per run, so a previous
+// run's backlog never counts toward the next one).
+func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	from, _ := time.Parse(time.RFC3339Nano, q.Get("from"))
+	to, _ := time.Parse(time.RFC3339Nano, q.Get("to"))
+	phone, kind, purpose := q.Get("phone"), q.Get("kind"), q.Get("purpose")
 	s.mu.Lock()
-	lat := append([]float64(nil), s.lat...)
+	var lat []float64
+	toPhone := 0
+	for _, x := range s.lat {
+		if (phone != "" && x.To != phone) || (kind != "" && x.Kind != kind) || (purpose != "" && x.Purpose != purpose) {
+			continue
+		}
+		toPhone++
+		if (from.IsZero() || !x.EventAt.Before(from)) && (to.IsZero() || x.EventAt.Before(to)) {
+			lat = append(lat, x.Ms)
+		}
+	}
 	out := map[string]any{"received": s.received, "rejected": s.rejected, "since": s.since,
 		"samples": len(lat)}
+	if phone != "" || kind != "" || purpose != "" {
+		out["received"] = toPhone
+	}
 	s.mu.Unlock()
 	if len(lat) > 0 {
 		sort.Float64s(lat)

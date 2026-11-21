@@ -142,7 +142,7 @@ func (d *Dispatcher) claim(ctx context.Context, limit int) ([]alerting.Notificat
 		    LIMIT $1
 		    FOR UPDATE SKIP LOCKED)
 		RETURNING n.id, n.alert_id, n.recipient, n.channel, n.address, n.subject, n.body_text, n.body_html,
-		          n.attempts, n.event_received_at, n.created_at`, limit, d.Lease.String())
+		          n.attempts, n.event_received_at, n.created_at, n.kind`, limit, d.Lease.String())
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +151,7 @@ func (d *Dispatcher) claim(ctx context.Context, limit int) ([]alerting.Notificat
 	for rows.Next() {
 		var n alerting.Notification
 		if err := rows.Scan(&n.ID, &n.AlertID, &n.Recipient, &n.Channel, &n.Address, &n.Subject, &n.BodyText,
-			&n.BodyHTML, &n.Attempts, &n.EventReceivedAt, &n.CreatedAt); err != nil {
+			&n.BodyHTML, &n.Attempts, &n.EventReceivedAt, &n.CreatedAt, &n.Kind); err != nil {
 			return nil, err
 		}
 		out = append(out, n)
@@ -178,10 +178,13 @@ func (d *Dispatcher) deliver(ctx context.Context, n alerting.Notification) {
 	case err == nil:
 		metrics.NotificationsSent.WithLabelValues(n.Channel, "sent").Inc()
 		metrics.EndToEndLatency.WithLabelValues(n.Channel).Observe(time.Since(n.EventReceivedAt).Seconds())
-		d.exec(ctx, `UPDATE notifications SET status = 'sent', sent_at = now(), locked_until = NULL, last_error = ''
-			WHERE id = $1`, n.ID)
-		// The primary got through: parked fallbacks are no longer needed.
-		d.exec(ctx, `UPDATE notifications SET status = 'cancelled' WHERE fallback_for = $1 AND status = 'standby'`, n.ID)
+		// Mark it sent and cancel its parked fallbacks (no longer needed) in one
+		// statement: one commit per delivery instead of two.
+		d.exec(ctx, `WITH sent AS (
+				UPDATE notifications SET status = 'sent', sent_at = now(), locked_until = NULL, last_error = ''
+				WHERE id = $1 RETURNING id)
+			UPDATE notifications SET status = 'cancelled'
+			WHERE fallback_for IN (SELECT id FROM sent) AND status = 'standby'`, n.ID)
 
 	case IsOpen(err):
 		// The channel is known to be down. Wait for the breaker's next probe

@@ -384,6 +384,23 @@ kardan-alerts/
   analysis files proposals itself: flapping (self-resolved before ack), noise (closed by people within
   minutes while paging), ignored (open > 1 day without ack), at most one open proposal per rule and signal.
 
+## Implementation notes (M10)
+
+- **Measure at the provider:** the fake gateway computes latency from the `eventReceivedAt` Kardan sends with
+  each message (event accepted -> provider accepted), records the destination and the notification purpose, and
+  can report percentiles per destination, purpose and event-time window. `cmd/loadgen` uses a phone number per
+  run, counts first alert SMS only, and fails on any missing delivery; Prometheus is a cross-check.
+- **Run isolation matters more than load:** each run warms up, starts from the same database state (synthetic
+  alerts deleted, tables vacuumed), and cleans up after itself (its auto-resolve "all clear" messages go out
+  before the next run starts). Without this, backlogs and all-clear floods from one run polluted the next.
+- **Dispatch writes once per delivery** (sent + cancel parked fallbacks in one statement).
+- Results and caveats: `loadtest/results.md`.
+
+## Implementation notes (M11)
+
+- Docs: `docs/architecture.md`, `docs/mocked.md`, `docs/ai-usage.md`, `docs/demo-script.md`; the demo story is
+  scripted in `samples/rates-desk-day.sh`.
+
 ## Milestones
 
 1. **Skeleton** — go.mod, compose (redpanda, postgres, redis, mailpit), role switch, migrations, React scaffold

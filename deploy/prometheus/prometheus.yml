@@ -1,0 +1,17 @@
+# Scrapes every Kardan replica. Docker's DNS returns one address per replica,
+# so `docker compose up --scale worker=3` is picked up without changes.
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: kardan-api
+    dns_sd_configs:
+      - { names: [api], type: A, port: 8080, refresh_interval: 5s }
+  - job_name: kardan-worker
+    dns_sd_configs:
+      - { names: [worker], type: A, port: 8080, refresh_interval: 5s }
+  - job_name: redpanda
+    metrics_path: /public_metrics
+    static_configs:
+      - targets: [redpanda:9644]

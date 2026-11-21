@@ -45,6 +45,7 @@ type gatewayRequest struct {
 	AlertID         string    `json:"alertId"`
 	ShortCode       string    `json:"shortCode"`
 	EventReceivedAt time.Time `json:"eventReceivedAt"`
+	Kind            string    `json:"kind,omitempty"` // alert | digest | resolved | approval | escalation
 }
 
 func (c *GatewayChannel) Name() string { return c.Kind }
@@ -55,7 +56,7 @@ func (c *GatewayChannel) Send(ctx context.Context, n alerting.Notification) erro
 		path = "/call"
 	}
 	body, _ := json.Marshal(gatewayRequest{ID: n.ID, To: n.Address, Text: n.BodyText, AlertID: n.AlertID,
-		ShortCode: alerting.ShortCode(n.AlertID), EventReceivedAt: n.EventReceivedAt})
+		ShortCode: alerting.ShortCode(n.AlertID), EventReceivedAt: n.EventReceivedAt, Kind: n.Kind})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.BaseURL, "/")+path, bytes.NewReader(body))
 	if err != nil {
 		return &PermanentError{err}
