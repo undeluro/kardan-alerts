@@ -367,6 +367,23 @@ kardan-alerts/
 - **Onboarding wizard** uses `POST /api/events/inspect` (parse + flatten + facets, nothing stored), then saves
   people, the team and the rule, and can send the sample through `/ingest/<team>-onboarding`.
 
+## Implementation notes (M9)
+
+- **Claude via the official Go SDK** (`anthropic-sdk-go/v2`, beta Messages): `claude-opus-5-5`, effort set
+  explicitly (`medium`), JSON output constrained by `output_config.format`, server-side refusal fallback
+  (`fallbacks: "default"`), stable system prompt marked for caching, `stop_reason` checked before decoding.
+- **Recursion-free rule schema:** conditions plus one level of groups; converted into the normal rule model,
+  compiled by the same compiler, and fields that were never seen are flagged instead of trusted.
+- **Runbook steps are allow-listed:** unknown action types become text steps, and high-risk actions always
+  get `approval: required` (the runtime risk policy still applies on top). The YAML goes through the normal
+  parser and preview before anyone saves it.
+- **Opt-in twice:** credentials (`ANTHROPIC_API_KEY`) and per team (`aiAssist: true`). Without either, the
+  built-in readers answer, so every feature works offline.
+- **Proposal queue = pull requests for config:** anyone proposes; a *named, different* person accepts, which
+  applies the change with the stored version it was based on (stale proposals are refused). Kardan's fatigue
+  analysis files proposals itself: flapping (self-resolved before ack), noise (closed by people within
+  minutes while paging), ignored (open > 1 day without ack), at most one open proposal per rule and signal.
+
 ## Milestones
 
 1. **Skeleton** — go.mod, compose (redpanda, postgres, redis, mailpit), role switch, migrations, React scaffold

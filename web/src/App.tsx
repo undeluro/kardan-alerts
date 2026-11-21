@@ -1,4 +1,4 @@
-import { ArrowRight, BellRing, BookOpenCheck, Cable, CalendarClock, Clock3, Compass, Database, Moon, Radio, ScrollText, Send, SlidersHorizontal, Sun, Users, UserRound } from "lucide-react";
+import { ArrowRight, BellRing, BookOpenCheck, Cable, CalendarClock, Clock3, Compass, Database, GitPullRequest, Moon, Radio, ScrollText, Send, SlidersHorizontal, Sun, Users, UserRound } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { api, type ClockState, type SchemaNotice, type Team } from "./api";
 import { AlertsPage } from "./pages/AlertsPage";
@@ -8,6 +8,7 @@ import { MarketsPage } from "./pages/MarketsPage";
 import { RunbooksPage } from "./pages/RunbooksPage";
 import { RunbookEditor } from "./pages/RunbookEditor";
 import { AuditPage } from "./pages/AuditPage";
+import { ProposalsPage } from "./pages/ProposalsPage";
 import { IncidentPage } from "./pages/IncidentPage";
 import { OnboardingPage } from "./pages/OnboardingPage";
 import { setBusinessClock } from "./clock";
@@ -46,6 +47,7 @@ const NAV = [
   { to: "/markets", label: "Markets", icon: CalendarClock, match: (p: string) => p.startsWith("/markets") },
   { to: "/deliveries", label: "Deliveries", icon: Send, match: (p: string) => p.startsWith("/deliveries") },
   { to: "/teams", label: "Teams", icon: Users, match: (p: string) => p.startsWith("/teams") || p.startsWith("/onboarding") },
+  { to: "/proposals", label: "Proposals", icon: GitPullRequest, match: (p: string) => p.startsWith("/proposals") },
   { to: "/audit", label: "Audit", icon: ScrollText, match: (p: string) => p.startsWith("/audit") },
 ];
 
@@ -134,6 +136,7 @@ export default function App() {
   else if (path === "/runbooks/new") page = <RunbookEditor key="new" id={null} teams={teams} />;
   else if (runbookMatch) page = <RunbookEditor key={runbookMatch[1]} id={decodeURIComponent(runbookMatch[1])} teams={teams} />;
   else if (path === "/audit") page = <AuditPage />;
+  else if (path === "/proposals") page = <ProposalsPage now={now} onToast={showToast} />;
   else if (path === "/onboarding") page = <OnboardingPage onToast={showToast} />;
   else if (incidentMatch) page = <IncidentPage id={decodeURIComponent(incidentMatch[1])} now={now} />;
   else if (path !== "/" && !alertId)

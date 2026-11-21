@@ -29,6 +29,9 @@ type Team struct {
 	Members     []string     `yaml:"members" json:"members"`
 	Preferences []Preference `yaml:"preferences,omitempty" json:"preferences,omitempty"`
 	OnCall      *OnCall      `yaml:"onCall,omitempty" json:"onCall,omitempty"`
+	// AIAssist opts the team in to Claude drafting rules and structuring
+	// runbooks (still reviewed by a person before saving).
+	AIAssist bool `yaml:"aiAssist,omitempty" json:"aiAssist,omitempty"`
 }
 
 type Directory struct {

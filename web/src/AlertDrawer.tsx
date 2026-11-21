@@ -1,9 +1,10 @@
 import * as Dialog from "@radix-ui/react-dialog";
-import { Code2, LockKeyhole, X } from "lucide-react";
+import { Code2, GitPullRequest, LockKeyhole, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { alertKind, api, type Alert, type Notification } from "./api";
 import { splitCutoffName, useBusinessNow } from "./clock";
 import { RunbookPanel } from "./RunbookPanel";
+import { ProposeSheet } from "./pages/ProposalsPage";
 import {
   Badge, Button, ChannelIcon, CutoffChip, EscalationBadge, KindBadge, Notice, RuleKindChip,
   alertStatusLabel, channelLabel, statusBadge, timeAgo, toneFor,
@@ -39,6 +40,8 @@ export function AlertDrawer({ id, live, now, onClose, onAction }: Props) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState<"ack" | "resolve" | null>(null);
+  const [proposing, setProposing] = useState<string | null>(null);
+  const [proposeError, setProposeError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -189,14 +192,26 @@ export function AlertDrawer({ id, live, now, onClose, onAction }: Props) {
             )}
           </div>
 
-          {alert && alert.status !== "resolved" && (
+          {alert && (
             <footer className="space-y-2 border-t border-[var(--console-line)] p-4 sm:p-5">
               {actionError && <div role="alert"><Notice tone="error">{actionError}</Notice></div>}
-              <div className="flex flex-wrap justify-end gap-2">
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <button type="button" className="mr-auto inline-flex items-center gap-1.5 text-sm font-medium text-[var(--console-accent)] hover:underline"
+                  onClick={() => {
+                    setProposeError(null);
+                    api.rule(alert.ruleId).then((d) => setProposing(d.yaml)).catch((e: Error) => setProposeError(e.message));
+                  }}>
+                  <GitPullRequest size={15} aria-hidden="true" /> Propose a fix to this rule
+                </button>
                 {alert.status === "open" && <Button variant="primary" disabled={busy !== null} onClick={() => void perform("ack")}>{busy === "ack" ? "Acknowledging…" : "Acknowledge"}</Button>}
-                <Button variant={alert.status === "acked" ? "primary" : "secondary"} disabled={busy !== null} onClick={() => void perform("resolve")}>{busy === "resolve" ? "Resolving…" : "Resolve alert"}</Button>
+                {alert.status !== "resolved" && <Button variant={alert.status === "acked" ? "primary" : "secondary"} disabled={busy !== null} onClick={() => void perform("resolve")}>{busy === "resolve" ? "Resolving…" : "Resolve alert"}</Button>}
               </div>
+              {proposeError && <Notice tone="error">{proposeError}</Notice>}
             </footer>
+          )}
+          {proposing !== null && alert && (
+            <ProposeSheet kind="rule" target={alert.ruleId} body={proposing} alertId={alert.id}
+              onClose={() => setProposing(null)} onDone={() => { setProposing(null); setProposeError(null); }} />
           )}
         </Dialog.Content>
       </Dialog.Portal>

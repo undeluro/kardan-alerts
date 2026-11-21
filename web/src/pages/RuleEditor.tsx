@@ -1,4 +1,6 @@
-import { ArrowLeft, FlaskConical, History } from "lucide-react";
+import { ArrowLeft, FlaskConical, GitPullRequest, History } from "lucide-react";
+import { RuleDraftPanel } from "../Assist";
+import { ProposeSheet } from "./ProposalsPage";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { isMap, parseDocument, visit } from "yaml";
 import { api, ApiError, type BacktestResult, type Info, type RuleDetail, type Team, type TestResult } from "../api";
@@ -81,6 +83,7 @@ export function RuleEditor({ id, teams }: { id: string | null; teams: Team[] }) 
   const [backtest, setBacktest] = useState<BacktestResult | null>(null);
   const [backtesting, setBacktesting] = useState(false);
   const [hours, setHours] = useState(1);
+  const [proposing, setProposing] = useState(false);
   const [loaded, setLoaded] = useState(!!created);
   const initialYaml = useRef(created?.detail.yaml ?? "");
   const initialisedDraft = useRef(false);
@@ -254,6 +257,11 @@ export function RuleEditor({ id, teams }: { id: string | null; teams: Team[] }) 
           <>
             {detail?.rule.origin === "api" &&
               <Button onClick={() => void remove()}>{isOverride ? "Revert to file" : "Delete"}</Button>}
+            {!isNew && detail && (
+              <Button onClick={() => setProposing(true)} disabled={!loaded || !dirty || !test?.valid}>
+                <GitPullRequest size={14} aria-hidden="true" /> Propose instead
+              </Button>
+            )}
             <Button variant="primary" onClick={() => void save()}
               disabled={!loaded || saving || testing || !test?.valid || (!dirty && !isNew)}>
               {saving ? "Saving…" : isNew ? "Create rule" : isFileRule ? "Save as UI override" : "Save changes"}
@@ -274,6 +282,17 @@ export function RuleEditor({ id, teams }: { id: string | null; teams: Team[] }) 
         <div className="mb-3">
           <Notice tone={message.tone}>{message.text}</Notice>
         </div>
+      )}
+
+      {isNew && (
+        <div className="mb-4">
+          <RuleDraftPanel teams={teams} sample={sample} onDraft={(y) => { setYaml(y); setView("builder"); }} />
+        </div>
+      )}
+      {proposing && detail && (
+        <ProposeSheet kind="rule" target={detail.rule.id} body={yaml}
+          onClose={() => setProposing(false)}
+          onDone={(m) => { setProposing(false); setMessage({ tone: "info", text: m + ". Find it under Proposals." }); }} />
       )}
 
       <div className="grid items-start gap-4 xl:grid-cols-2">

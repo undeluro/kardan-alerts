@@ -40,6 +40,7 @@ people:
 teams:
   - id: settlements
     name: Settlements Operations
+    aiAssist: true # Claude may draft rules and structure runbooks (reviewed before saving)
     members: [sam, maria]
     onCall:
       timezone: Europe/London
@@ -55,6 +56,7 @@ teams:
 
   - id: payments
     name: Payments Platform
+    aiAssist: true # Claude may draft rules and structure runbooks (reviewed before saving)
     members: [anna, tom]
     onCall:
       timezone: Europe/London

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError, type ParseResult, type RunbookDraft, type Team } from "../api";
 import { navigate, Link } from "../router";
-import { ArrowUpRight } from "lucide-react";
+import { ArrowUpRight, Sparkles } from "lucide-react";
+import { SourceBadge, useAIStatus } from "../Assist";
 import { Badge, Button, Card, humanEvery, Notice, Select, inputClass } from "../ui";
 import { describeCondition, formatLabel } from "./RunbooksPage";
 
@@ -46,6 +47,9 @@ export function RunbookEditor({ id, teams }: { id: string | null; teams: Team[] 
   const [override, setOverride] = useState(false); // editing a file runbook in the UI
   const [origin, setOrigin] = useState<string | undefined>();
   const timer = useRef<number | undefined>(undefined);
+  const ai = useAIStatus();
+  const [structuring, setStructuring] = useState(false);
+  const [aiNote, setAiNote] = useState<{ source: "claude" | "heuristic"; text: string; warnings: string[] } | null>(null);
 
   useEffect(() => {
     if (id === null) return;
@@ -185,6 +189,37 @@ export function RunbookEditor({ id, teams }: { id: string | null; teams: Team[] 
             placeholder={"Paste a runbook: YAML steps, a Markdown page, a checklist, a wiki link, or plain sentences such as\n\"Restart the service named in the alert, wait 2 minutes, and if it is still failing, call the on-call person.\""}
             className={`${inputClass} h-72 font-mono text-xs leading-relaxed`}
           />
+          {editable && draft.source.trim() && (
+            <div className="space-y-1.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button disabled={structuring} onClick={async () => {
+                  setStructuring(true);
+                  try {
+                    const res = await api.aiRunbook({ text: draft.source, team: draft.team ?? "", id: draft.id || undefined, name: draft.name || undefined });
+                    if (res.source === "claude" && res.valid && res.yaml) set({ source: res.yaml, matches: draft.matches });
+                    setAiNote({ source: res.source, text: res.source === "claude" ? res.notes : (res.fallback ?? ""), warnings: res.warnings ?? [] });
+                  } catch (e) {
+                    setAiNote({ source: "heuristic", text: (e as Error).message, warnings: [] });
+                  } finally {
+                    setStructuring(false);
+                  }
+                }}>
+                  <Sparkles size={14} aria-hidden="true" /> {structuring ? "Structuring…" : "Structure with Claude"}
+                </Button>
+                <span className="console-muted text-xs">
+                  {ai?.configured && ai.teams.includes(draft.team ?? "")
+                    ? "Sends only this text and the action catalogue; you review the steps before saving."
+                    : "Claude is off for this team; the built-in reader below already structures the text."}
+                </span>
+              </div>
+              {aiNote && (
+                <div className="space-y-1 text-xs">
+                  <SourceBadge source={aiNote.source} /> {aiNote.text && <span>{aiNote.text}</span>}
+                  {aiNote.warnings.map((w) => <p key={w} className="text-amber-700 dark:text-amber-300">{w}</p>)}
+                </div>
+              )}
+            </div>
+          )}
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="text-sm">
               <span className="text-gray-600 dark:text-gray-300">Name</span>

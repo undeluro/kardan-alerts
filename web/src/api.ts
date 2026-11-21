@@ -126,6 +126,7 @@ export interface Team {
   members: string[];
   preferences?: Preference[];
   onCall?: OnCallConfig;
+  aiAssist?: boolean;
 }
 
 export type Origin = "file" | "api" | "override";
@@ -424,6 +425,42 @@ export interface Inspection {
   facets: Record<string, unknown>;
 }
 
+export interface AIStatus {
+  configured: boolean;
+  model: string;
+  teams: string[];
+}
+
+export interface RuleDraftResult {
+  source: "claude" | "heuristic";
+  yaml: string;
+  explanation: string;
+  warnings: string[];
+  fallback?: string;
+  valid: boolean;
+  error?: string;
+  matchesSample?: boolean;
+}
+
+export interface Proposal {
+  id: string;
+  kind: "rule" | "runbook";
+  target: string;
+  title: string;
+  rationale: string;
+  body: string;
+  baseVersion: number;
+  source: "person" | "system" | "ai";
+  signal?: string;
+  alertId?: string;
+  status: "open" | "accepted" | "rejected";
+  createdBy: string;
+  createdAt: string;
+  decidedBy?: string;
+  decidedAt?: string;
+  decisionNote?: string;
+}
+
 export interface DirectoryEntry {
   kind: "person" | "team";
   id: string;
@@ -547,6 +584,18 @@ export const api = {
   revertTeam: (id: string) => request<void>("DELETE", `/api/teams/${encodeURIComponent(id)}`),
   savePerson: (p: Person) => request<DirectoryEntry>("PUT", `/api/people/${encodeURIComponent(p.id)}`, p),
   revertPerson: (id: string) => request<void>("DELETE", `/api/people/${encodeURIComponent(id)}`),
+  aiStatus: () => request<AIStatus>("GET", "/api/ai/status"),
+  aiRuleDraft: (sentence: string, team: string, sample = "") => request<RuleDraftResult>("POST", "/api/ai/rule-draft", { sentence, team, sample }),
+  aiRunbook: (body: { text: string; team: string; id?: string; name?: string }) =>
+    request<ParseResult & { source: "claude" | "heuristic"; notes: string; warnings: string[]; fallback?: string }>("POST", "/api/ai/runbook", body),
+  proposals: (status = "") => request<Proposal[]>("GET", `/api/proposals${qs({ status })}`),
+  proposal: (id: string) => request<{ proposal: Proposal; current: string }>("GET", `/api/proposals/${encodeURIComponent(id)}`),
+  propose: (p: Pick<Proposal, "kind" | "target" | "title" | "rationale" | "body"> & { alertId?: string; source?: "person" | "ai" }) =>
+    request<Proposal>("POST", "/api/proposals", p),
+  decideProposal: (id: string, accept: boolean, note: string) =>
+    request<Proposal>("POST", `/api/proposals/${encodeURIComponent(id)}/${accept ? "accept" : "reject"}`, { note }),
+  analyzeFatigue: (days = 7) =>
+    request<{ rulesAnalyzed: number; created: Proposal[]; alreadyOpen: number; days: number }>("POST", "/api/proposals/analyze", { days }),
   backtestRule: (ruleYaml: string, hours: number) => request<BacktestResult>("POST", "/api/rules/backtest", { ruleYaml, hours }),
   inspectEvent: (raw: string) => request<Inspection>("POST", "/api/events/inspect", { raw }),
   /** Sends a raw event through HTTP ingest, exactly as a webhook would. */

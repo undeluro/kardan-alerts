@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/undeluro/kardan-alerts/internal/actions"
+	"github.com/undeluro/kardan-alerts/internal/ai"
 	"github.com/undeluro/kardan-alerts/internal/alerting"
 	"github.com/undeluro/kardan-alerts/internal/audit"
 	"github.com/undeluro/kardan-alerts/internal/calendar"
@@ -22,6 +23,7 @@ import (
 	"github.com/undeluro/kardan-alerts/internal/finance"
 	"github.com/undeluro/kardan-alerts/internal/ingest"
 	"github.com/undeluro/kardan-alerts/internal/platform/clock"
+	"github.com/undeluro/kardan-alerts/internal/proposals"
 	"github.com/undeluro/kardan-alerts/internal/replay"
 	"github.com/undeluro/kardan-alerts/internal/rules"
 	"github.com/undeluro/kardan-alerts/internal/runbooks"
@@ -61,7 +63,9 @@ type Server struct {
 	CheckDirectory   func(context.Context, directory.Entry) error
 	ReloadDirectory  func(context.Context)
 	Replay           *replay.Replayer // reads past events for rule backtests
-	UI               fs.FS            // built React app; nil when not embedded
+	Proposals        *proposals.Store
+	AI               *ai.Assistant
+	UI               fs.FS // built React app; nil when not embedded
 	Log              *slog.Logger
 	Info             map[string]any
 }
@@ -92,6 +96,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/calendars", s.getCalendars)
 	s.registerRunbooks(mux)
 	s.registerDirectory(mux)
+	s.registerAssist(mux)
 	mux.HandleFunc("GET /api/deliveries", s.listDeliveries)
 	mux.HandleFunc("POST /api/notifications/{id}/resend", s.resend)
 	mux.HandleFunc("GET /api/channels", s.channels)

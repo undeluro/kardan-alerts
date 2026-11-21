@@ -16,6 +16,7 @@ import (
 	"github.com/twmb/franz-go/pkg/kgo"
 	"golang.org/x/sync/errgroup"
 
+	"github.com/undeluro/kardan-alerts/internal/ai"
 	"github.com/undeluro/kardan-alerts/internal/alerting"
 	"github.com/undeluro/kardan-alerts/internal/api"
 	"github.com/undeluro/kardan-alerts/internal/audit"
@@ -29,6 +30,7 @@ import (
 	"github.com/undeluro/kardan-alerts/internal/platform/kafka"
 	"github.com/undeluro/kardan-alerts/internal/platform/pg"
 	"github.com/undeluro/kardan-alerts/internal/processor"
+	"github.com/undeluro/kardan-alerts/internal/proposals"
 	"github.com/undeluro/kardan-alerts/internal/replay"
 	"github.com/undeluro/kardan-alerts/internal/rules"
 	"github.com/undeluro/kardan-alerts/internal/runbooks"
@@ -199,6 +201,8 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 			CheckDirectory:  reloader.CheckDirectory,
 			ReloadDirectory: func(ctx context.Context) { _ = reloader.rebuildDirectory(ctx, false) },
 			Replay:          &replay.Replayer{Brokers: cfg.KafkaBrokers, Topic: cfg.EventsTopic},
+			Proposals:       &proposals.Store{Pool: pool},
+			AI:              ai.New(log.With("component", "ai")),
 			ChannelStates:   func(r *http.Request) map[string]string { return channelStates(r.Context(), rdb) },
 			Notify:          func(ctx context.Context, kind string) error { return bus.NotifyConfig(ctx, rdb, kind) },
 			ParseRaw: func(source string, raw []byte) *event.Envelope {

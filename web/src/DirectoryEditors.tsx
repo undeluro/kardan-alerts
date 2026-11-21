@@ -366,6 +366,13 @@ export function TeamSheet({ team, people, defaults, onClose, onSaved }: {
           </div>
         )}
       </section>
+      <label className="flex items-start gap-2 text-sm">
+        <input type="checkbox" className="mt-0.5" checked={!!draft.aiAssist} onChange={(e) => setDraft({ ...draft, aiAssist: e.target.checked || undefined })} />
+        <span>
+          <span className="font-medium">Allow Claude assistance</span>
+          <span className="console-muted block text-xs">Claude may draft rules from sentences and structure pasted runbooks for this team. Only the text and field names are sent, never event values; people review every draft before it is saved.</span>
+        </span>
+      </label>
       <section>
         <h3 className="mb-1 font-semibold">Team preferences</h3>
         <p className="console-muted mb-2 text-xs">Used for members who set none of their own.</p>

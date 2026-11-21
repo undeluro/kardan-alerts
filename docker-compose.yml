@@ -39,6 +39,10 @@ services:
     environment:
       <<: *kardan-env
       ROLES: api,ingest
+      # Optional Claude assistance (rule drafts, runbook structuring). Without a
+      # key the built-in readers are used. Teams opt in with aiAssist: true.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      AI_ASSIST: ${AI_ASSIST:-on}
     ports:
       - "8080:8080"
     volumes:
