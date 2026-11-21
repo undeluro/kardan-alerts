@@ -76,15 +76,14 @@ export function AuditPage() {
           )}
         </div>
       )}
-      <div className="mb-3 flex flex-wrap gap-1.5">
+      <div className="mb-3 flex flex-wrap gap-1" role="group" aria-label="Audit category">
         {prefixes.map(([p, label]) => (
           <button
             key={p}
             type="button"
+            aria-pressed={prefix === p}
             onClick={() => setPrefix(p)}
-            className={`rounded-md px-2.5 py-1 text-sm ${
-              prefix === p ? "bg-gray-900 text-white dark:bg-white dark:text-gray-900" : "text-gray-600 ring-1 ring-gray-300 dark:text-gray-300 dark:ring-gray-700"
-            }`}
+            className="console-toggle"
           >
             {label}
           </button>

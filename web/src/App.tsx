@@ -1,3 +1,4 @@
+import { ArrowRight, BellRing, BookOpenCheck, Cable, CalendarClock, Clock3, Compass, Database, Moon, Radio, ScrollText, Send, SlidersHorizontal, Sun, Users, UserRound } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { api, type ClockState, type SchemaNotice, type Team } from "./api";
 import { AlertsPage } from "./pages/AlertsPage";
@@ -35,15 +36,15 @@ const store = {
 };
 
 const NAV = [
-  { to: "/", label: "Alerts", match: (p: string) => p === "/" || p.startsWith("/alerts") },
-  { to: "/rules", label: "Rules", match: (p: string) => p.startsWith("/rules") },
-  { to: "/schemas", label: "Schemas", match: (p: string) => p.startsWith("/schemas") },
-  { to: "/sources", label: "Sources", match: (p: string) => p.startsWith("/sources") },
-  { to: "/runbooks", label: "Runbooks", match: (p: string) => p.startsWith("/runbooks") },
-  { to: "/markets", label: "Markets", match: (p: string) => p.startsWith("/markets") },
-  { to: "/deliveries", label: "Deliveries", match: (p: string) => p.startsWith("/deliveries") },
-  { to: "/teams", label: "Teams", match: (p: string) => p.startsWith("/teams") },
-  { to: "/audit", label: "Audit", match: (p: string) => p.startsWith("/audit") },
+  { to: "/", label: "Alerts", icon: BellRing, match: (p: string) => p === "/" || p.startsWith("/alerts") },
+  { to: "/rules", label: "Rules", icon: SlidersHorizontal, match: (p: string) => p.startsWith("/rules") },
+  { to: "/schemas", label: "Schemas", icon: Database, match: (p: string) => p.startsWith("/schemas") },
+  { to: "/sources", label: "Sources", icon: Cable, match: (p: string) => p.startsWith("/sources") },
+  { to: "/runbooks", label: "Runbooks", icon: BookOpenCheck, match: (p: string) => p.startsWith("/runbooks") },
+  { to: "/markets", label: "Markets", icon: CalendarClock, match: (p: string) => p.startsWith("/markets") },
+  { to: "/deliveries", label: "Deliveries", icon: Send, match: (p: string) => p.startsWith("/deliveries") },
+  { to: "/teams", label: "Teams", icon: Users, match: (p: string) => p.startsWith("/teams") },
+  { to: "/audit", label: "Audit", icon: ScrollText, match: (p: string) => p.startsWith("/audit") },
 ];
 
 export default function App() {
@@ -60,6 +61,7 @@ export default function App() {
     else url.searchParams.delete("incident");
     window.history.replaceState(null, "", url);
   }, []);
+  const [theme, setTheme] = useState(() => store.get("kardan.theme", "dark") === "light" ? "light" : "dark");
   const [actor, setActor] = useState(() => store.get("kardan.actor", ""));
   const [teams, setTeams] = useState<Team[]>([]);
   const [now, setNow] = useState(Date.now());
@@ -88,7 +90,7 @@ export default function App() {
 
   // The live feed stays connected on every page, so alert counts and
   // "new schema" notices arrive wherever the user is.
-  const { alerts, connection, error, flash, replace } = useLiveAlerts(team, { filter, sort, incident }, onSchema);
+  const { alerts, connection, error, loading, flash, replace, reload } = useLiveAlerts(team, { filter, sort, incident }, onSchema);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -102,6 +104,10 @@ export default function App() {
   useEffect(() => store.set("kardan.actor", actor), [actor]);
   useEffect(() => store.set("kardan.sort", sort), [sort]);
   useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    store.set("kardan.theme", theme);
+  }, [theme]);
+  useEffect(() => {
     const t = window.setInterval(() => setNow(Date.now()), 10_000);
     return () => window.clearInterval(t);
   }, []);
@@ -113,8 +119,8 @@ export default function App() {
 
   let page;
   if (path === "/rules") page = <RulesPage />;
-  else if (path === "/rules/new") page = <RuleEditor id={null} teams={teams} />;
-  else if (ruleMatch) page = <RuleEditor id={decodeURIComponent(ruleMatch[1])} teams={teams} />;
+  else if (path === "/rules/new") page = <RuleEditor key="new" id={null} teams={teams} />;
+  else if (ruleMatch) page = <RuleEditor key={ruleMatch[1]} id={decodeURIComponent(ruleMatch[1])} teams={teams} />;
   else if (path === "/schemas") page = <SchemasPage now={now} />;
   else if (schemaMatch) page = <SchemaDetail id={schemaMatch[1]} teams={teams} now={now} />;
   else if (path === "/sources") page = <SourcesPage now={now} />;
@@ -128,7 +134,7 @@ export default function App() {
   else if (path !== "/" && !alertId)
     page = (
       <div className="py-16 text-center">
-        <div className="text-4xl">🧭</div>
+        <Compass size={28} aria-hidden="true" className="console-muted mx-auto" />
         <h1 className="mt-2 text-lg font-semibold">Page not found</h1>
         <p className="mt-1 text-sm text-gray-500">
           Nothing lives at <code className="font-mono">{path}</code>.{" "}
@@ -143,9 +149,14 @@ export default function App() {
       <AlertsPage
         alerts={alerts}
         error={error}
+        loading={loading}
+        connection={connection}
+        onRetry={reload}
         flash={flash}
         replace={replace}
         team={team}
+        teams={teams}
+        onTeamChange={setTeam}
         filter={filter}
         setFilter={setFilter}
         sort={sort}
@@ -159,74 +170,58 @@ export default function App() {
       />
     );
 
-  const onAlerts = NAV[0].match(path);
-
   return (
-    <div className="min-h-screen bg-gray-50 text-gray-900 dark:bg-gray-950 dark:text-gray-100">
-      <header className="sticky top-0 z-30 border-b border-gray-200 bg-white/90 backdrop-blur dark:border-gray-800 dark:bg-gray-950/90">
-        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-4 gap-y-2 px-4 py-2.5">
-          <Link to="/" className="flex items-center gap-2 font-semibold">
-            <span className="grid h-7 w-7 place-items-center rounded-md bg-gray-900 text-amber-400 dark:bg-white dark:text-amber-500">K</span>
-            Kardan
-          </Link>
-          <nav className="flex gap-1 text-sm">
-            {NAV.map((n) => (
-              <Link
-                key={n.to}
-                to={n.to}
-                className={`rounded-md px-2.5 py-1.5 font-medium ${
-                  n.match(path)
-                    ? "bg-gray-100 text-gray-900 dark:bg-gray-800 dark:text-white"
-                    : "text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-white"
-                }`}
-              >
-                {n.label}
-              </Link>
-            ))}
-          </nav>
-          {onAlerts && (
-            <select
-              value={team}
-              onChange={(e) => setTeam(e.target.value)}
-              className="rounded-md border-0 bg-white py-1.5 pr-8 pl-2.5 text-sm ring-1 ring-gray-300 ring-inset dark:bg-gray-900 dark:ring-gray-700"
-              aria-label="Team"
-            >
-              <option value="">All teams</option>
-              {teams.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
-          )}
-          <LiveIndicator connection={connection} />
-          {clock && clock.offsetMinutes !== 0 && (
-            <Link
-              to="/teams"
-              className="rounded-md bg-amber-100 px-2 py-1 text-xs font-medium text-amber-900 dark:bg-amber-500/20 dark:text-amber-200"
-              title="The business clock is shifted for the demo"
-            >
-              ⏱ simulated {new Date(clock.now).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}
+    <div className="console-layout">
+      <a className="skip-link" href="#main-content">Skip to content</a>
+      <aside className="console-sidebar">
+        <Link to="/" className="console-brand">
+          <span className="console-mark"><Radio size={19} aria-hidden="true" /></span>
+          Kardan
+        </Link>
+        <nav aria-label="Workspace" className="console-nav">
+          {NAV.map(({ to, label, icon: Icon, match }) => (
+            <Link key={to} to={to} aria-current={match(path) ? "page" : undefined} className="console-nav-item">
+              <Icon size={17} aria-hidden="true" />
+              {label}
             </Link>
-          )}
-          <div className="ml-auto flex items-center gap-2">
-            <label htmlFor="actor" className="text-xs text-gray-500">
-              Acting as
-            </label>
-            <input
-              id="actor"
-              value={actor}
-              onChange={(e) => setActor(e.target.value)}
-              placeholder="your name"
-              className="w-32 rounded-md border-0 bg-white px-2.5 py-1.5 text-sm ring-1 ring-gray-300 ring-inset dark:bg-gray-900 dark:ring-gray-700"
-            />
+          ))}
+        </nav>
+      </aside>
+
+      <div className="console-workspace">
+        <header className="console-topbar">
+          <div className="flex min-w-0 flex-wrap items-center gap-3">
+            <LiveIndicator connection={connection} />
+            {clock && clock.offsetMinutes !== 0 && (
+              <Link to="/teams" className="inline-flex items-center gap-1 rounded-md bg-amber-100 px-2 py-1 text-xs font-medium text-amber-900 dark:bg-amber-500/20 dark:text-amber-200">
+                <Clock3 size={13} aria-hidden="true" />
+                Simulated {new Date(clock.now).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}
+              </Link>
+            )}
           </div>
-        </div>
-      </header>
+          <div className="flex items-center gap-2">
+            <label className="console-actor">
+              <UserRound size={15} aria-hidden="true" />
+              <span className="hidden sm:inline">Acting as</span>
+              <input
+                aria-label="Acting as"
+                value={actor}
+                onChange={(e) => setActor(e.target.value)}
+                placeholder="Your name"
+              />
+            </label>
+            <button type="button" className="console-theme"
+              aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+              title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
+              {theme === "dark" ? <Sun size={15} aria-hidden="true" /> : <Moon size={15} aria-hidden="true" />}
+            </button>
+          </div>
+        </header>
+        <main id="main-content" tabIndex={-1} className="console-main">{page}</main>
+      </div>
 
-      <main className="mx-auto max-w-6xl px-4 py-5">{page}</main>
-
-      <div className="fixed right-4 bottom-4 z-50 flex w-80 flex-col gap-2">
+      <div className="pointer-events-none fixed right-4 bottom-4 z-50 flex w-[min(20rem,calc(100%-2rem))] flex-col gap-2">
         {schemaNotices.map((s) => (
           <button
             key={s.id}
@@ -234,7 +229,7 @@ export default function App() {
               setSchemaNotices((prev) => prev.filter((p) => p.id !== s.id));
               navigate(`/schemas/${s.id}`);
             }}
-            className="rounded-lg bg-white p-3 text-left shadow-lg ring-1 ring-gray-200 hover:ring-amber-400 dark:bg-gray-900 dark:ring-gray-700"
+            className="pointer-events-auto rounded-lg bg-white p-3 text-left shadow-lg ring-1 ring-gray-200 hover:ring-amber-400 dark:bg-gray-900 dark:ring-gray-700"
           >
             <div className="text-xs font-medium tracking-wide text-amber-600 uppercase dark:text-amber-400">New schema detected</div>
             <div className="mt-0.5 font-medium">{s.name}</div>
@@ -248,10 +243,10 @@ export default function App() {
                 ))}
               </div>
             )}
-            <div className="mt-1.5 text-xs text-gray-500">Click to review fields and create a rule →</div>
+            <div className="console-muted mt-1.5 flex items-center gap-1 text-xs">Review schema <ArrowRight size={13} aria-hidden="true" /></div>
           </button>
         ))}
-        {toast && <div className="rounded-md bg-gray-900 px-4 py-2 text-sm text-white shadow-lg">{toast}</div>}
+        {toast && <div role="status" className="rounded-md bg-gray-900 px-4 py-2 text-sm text-white shadow-lg">{toast}</div>}
       </div>
     </div>
   );
@@ -260,13 +255,13 @@ export default function App() {
 function LiveIndicator({ connection }: { connection: Connection }) {
   const map = {
     live: ["bg-emerald-500", "Live"],
-    connecting: ["bg-amber-500 animate-pulse", "Connecting…"],
+    connecting: ["bg-amber-500", "Connecting…"],
     offline: ["bg-red-500", "Offline"],
   } as const;
   const [dot, label] = map[connection];
   return (
-    <span className="flex items-center gap-1.5 text-xs text-gray-500 dark:text-gray-400" aria-live="polite">
-      <span className={`h-2 w-2 rounded-full ${dot}`} />
+    <span className="console-live flex items-center gap-1.5 text-xs font-medium" aria-live="polite">
+      <span aria-hidden="true" className={`size-1.5 rounded-full ${dot}`} />
       {label}
     </span>
   );

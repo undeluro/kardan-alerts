@@ -1,3 +1,4 @@
+import { ArrowUpRight } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { api, getActor, type AuditEntry, type Run, type RunbookView, type StepView } from "./api";
 import { Badge, Button, humanEvery, Notice, timeAgo } from "./ui";
@@ -123,7 +124,7 @@ export function RunbookPanel({ alertId, resolved, now }: { alertId: string; reso
             {v.summary && <p className="mt-1 text-sm text-gray-600 italic dark:text-gray-300">{v.summary}</p>}
             {v.url && (
               <a href={v.url} target="_blank" rel="noreferrer" className="mt-1 block truncate text-sm text-amber-700 hover:underline dark:text-amber-400">
-                {v.url} ↗
+                {v.url} <ArrowUpRight size={13} aria-hidden="true" className="inline-block" />
               </a>
             )}
             <ol className="mt-2 space-y-2">

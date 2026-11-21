@@ -1,9 +1,8 @@
+import { ArrowUpRight } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { api, type ChannelView, type Delivery, type Info } from "../api";
 import { Link } from "../router";
-import { Badge, Button, Card, KindBadge, Notice, PageHeader, statusBadge, timeAgo, toneFor } from "../ui";
-
-const channelIcon: Record<string, string> = { email: "✉", sms: "💬", phone: "📞" };
+import { Badge, Button, Card, ChannelIcon, KindBadge, Notice, PageHeader, Select, channelLabel, statusBadge, timeAgo, toneFor } from "../ui";
 
 const FILTERS = [
   ["", "All"],
@@ -49,7 +48,7 @@ export function DeliveriesPage({ now, onToast }: { now: number; onToast: (m: str
     <>
       <PageHeader
         title="Deliveries"
-        subtitle="Every email, SMS and call, with retries. If a provider fails, messages wait and are retried with backoff; after repeated failures the channel's circuit breaker opens, critical alerts switch to their fallback channel, and the backlog drains when the provider recovers. Nothing is dropped."
+        subtitle="Monitor channel health, delivery attempts, and retries."
         actions={
           info?.gatewayUrl && (
             <a
@@ -58,7 +57,7 @@ export function DeliveriesPage({ now, onToast }: { now: number; onToast: (m: str
               rel="noopener"
               className="rounded-md bg-white px-2.5 py-1.5 text-sm font-medium ring-1 ring-gray-300 ring-inset hover:bg-gray-50 dark:bg-gray-800 dark:ring-gray-600"
             >
-              Open phone simulator ↗
+              Open phone simulator <ArrowUpRight size={13} aria-hidden="true" className="ml-0.5 inline-block" />
             </a>
           )
         }
@@ -82,12 +81,12 @@ export function DeliveriesPage({ now, onToast }: { now: number; onToast: (m: str
         </div>
       )}
 
-      <div className="mb-5 grid gap-3 sm:grid-cols-3">
+      <div className="mb-4 grid gap-2 sm:grid-cols-3">
         {channels.map((c) => (
-          <Card key={c.channel} className="p-4">
+          <Card key={c.channel} className="p-3">
             <div className="flex items-center gap-2">
-              <span className="text-lg">{channelIcon[c.channel]}</span>
-              <span className="font-semibold capitalize">{c.channel}</span>
+              <ChannelIcon channel={c.channel} className="console-muted shrink-0" />
+              <span className="font-semibold capitalize">{channelLabel(c.channel)}</span>
               <BreakerBadge state={c.breaker} />
             </div>
             <div className="mt-0.5 text-xs text-gray-500">{c.provider}</div>
@@ -110,35 +109,33 @@ export function DeliveriesPage({ now, onToast }: { now: number; onToast: (m: str
         {FILTERS.map(([v, label]) => (
           <button
             key={label}
+            type="button"
+            aria-pressed={status === v}
             onClick={() => setStatus(v)}
-            className={`rounded-md px-3 py-1.5 font-medium ${
-              status === v
-                ? "bg-gray-900 text-white dark:bg-white dark:text-gray-900"
-                : "text-gray-600 hover:bg-gray-200/60 dark:text-gray-300 dark:hover:bg-gray-800"
-            }`}
+            className="console-toggle"
           >
             {label}
           </button>
         ))}
-        <select
+        <Select
           value={channel}
           onChange={(e) => setChannel(e.target.value)}
-          className="ml-auto rounded-md border-0 bg-white py-1.5 pr-8 pl-2.5 text-sm ring-1 ring-gray-300 ring-inset dark:bg-gray-900 dark:ring-gray-700"
+          className="ml-auto min-w-36"
           aria-label="Channel"
         >
           <option value="">All channels</option>
           <option value="email">Email</option>
           <option value="sms">SMS</option>
           <option value="phone">Phone</option>
-        </select>
+        </Select>
       </div>
 
       <Card className="divide-y divide-gray-100 dark:divide-gray-800">
         {items === null && <div className="p-4 text-sm text-gray-500">Loading…</div>}
-        {items?.length === 0 && <div className="p-4 text-sm text-gray-500">Nothing here.</div>}
+        {items?.length === 0 && <div className="p-4 text-sm text-gray-500">No deliveries match these filters.</div>}
         {items?.map((d) => (
           <div key={d.id} className="flex flex-wrap items-start gap-3 p-3 text-sm">
-            <span className="mt-0.5 w-5 text-center">{channelIcon[d.channel]}</span>
+            <span className="console-muted mt-0.5"><ChannelIcon channel={d.channel} /><span className="sr-only">{channelLabel(d.channel)}</span></span>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-medium">{d.recipient}</span>

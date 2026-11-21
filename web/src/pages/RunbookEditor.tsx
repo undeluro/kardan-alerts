@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError, type ParseResult, type RunbookDraft, type Team } from "../api";
 import { navigate, Link } from "../router";
-import { Badge, Button, Card, humanEvery, Notice, inputClass } from "../ui";
+import { ArrowUpRight } from "lucide-react";
+import { Badge, Button, Card, humanEvery, Notice, Select, inputClass } from "../ui";
 import { describeCondition, formatLabel } from "./RunbooksPage";
 
 const chip = "bg-gray-50 text-gray-600 ring-gray-300 dark:bg-gray-800 dark:text-gray-300 dark:ring-gray-700";
@@ -191,14 +192,14 @@ export function RunbookEditor({ id, teams }: { id: string | null; teams: Team[] 
             </label>
             <label className="text-sm">
               <span className="text-gray-600 dark:text-gray-300">Team</span>
-              <select value={draft.team ?? ""} onChange={(e) => set({ team: e.target.value })} disabled={!editable} className={inputClass}>
+              <Select value={draft.team ?? ""} onChange={(e) => set({ team: e.target.value })} disabled={!editable}>
                 <option value="">—</option>
                 {teams.map((t) => (
                   <option key={t.id} value={t.id}>
                     {t.name}
                   </option>
                 ))}
-              </select>
+              </Select>
             </label>
             <label className="text-sm sm:col-span-2">
               <span className="text-gray-600 dark:text-gray-300">Show it on alerts whose event matches (field: value, one per line)</span>
@@ -262,7 +263,7 @@ export function RunbookEditor({ id, teams }: { id: string | null; teams: Team[] 
               {rb.summary && <p className="text-gray-600 italic dark:text-gray-300">Context: {rb.summary}</p>}
               {rb.url && (
                 <a href={rb.url} target="_blank" rel="noreferrer" className="block truncate text-amber-700 hover:underline">
-                  {rb.url} ↗
+                  {rb.url} <ArrowUpRight size={13} aria-hidden="true" className="inline-block" />
                 </a>
               )}
               <ol className="space-y-2">

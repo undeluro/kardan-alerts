@@ -1,3 +1,4 @@
+import { ArrowLeft } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api, type FieldInfo, type SchemaDetail as Detail, type Team } from "../api";
 import { Link, navigate } from "../router";
@@ -77,7 +78,7 @@ export function SchemaDetail({ id, teams, now }: { id: string; teams: Team[]; no
     <>
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <Link to="/schemas" className="text-sm text-gray-500 hover:text-gray-800 dark:hover:text-gray-200">
-          ← Schemas
+          <ArrowLeft size={14} className="mr-1 inline-block" aria-hidden="true" /> Schemas
         </Link>
         <input value={name} onChange={(e) => setName(e.target.value)} className={`${inputClass} max-w-sm text-lg font-semibold`} aria-label="Schema name" />
         <Badge className="bg-gray-100 text-gray-700 ring-gray-300 dark:bg-gray-800 dark:text-gray-300 dark:ring-gray-700">{s.format}</Badge>
